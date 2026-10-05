@@ -1,0 +1,33 @@
+# dsh-opencode-free-model bundle patch.
+#
+# One `insert` mounts the Host half. The `name` must be the bare package name:
+# that is the row the loader resolves through this profile's `node_modules`, and
+# the row a client half would bind to (this plugin ships Host-only, so there is
+# no `dsh.client` declaration to bind).
+#
+# `config` is applied *over* the persisted settings on every mount, so a key
+# written here always wins — that is the natural reading of a composition file,
+# and it keeps the shipped defaults in one place (`SETTINGS_INITIAL` in
+# `lib/index.js`). Add only the keys you want to change; an unknown key or one
+# with the wrong shape is ignored with a warning rather than failing the plugin.
+#
+# Available keys (defaults in parentheses):
+#   enabled: true|false                 master switch; false stops the picker
+#                                       advertising models and fails calls with
+#                                       CONFIG_DISABLED (the routes stay mounted,
+#                                       so an existing session never gets
+#                                       NO_ADAPTER)
+#   exposeRegionModels: true|false      advertise egress-sensitive models on the
+#                                       second route when they probe usable (true)
+#   probeIntervalMinutes: <int >= 1>    background availability re-probe period (15)
+#   defaultMaxTokens: <int > 0>         per-turn output ceiling before each
+#                                       model's own capacity (32768)
+#   streamRecovery: true|false|{...}    one reasoning-checkpoint continuation (true)
+#   wireOverrides: {<model id>: chat|responses|messages}
+#                                       pin a model to a wire if upstream moves it
+#   baseUrl: <string>                   upstream root override (default
+#                                       https://opencode.ai, or $OPENCODE_FREE_MODEL_BASE)
+- insert:
+    - id: opencode-free-model
+      name: 'dsh-opencode-free-model'
+      config: {}

@@ -1,0 +1,48 @@
+{
+  "name": "dsh-opencode-free-model",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "DeepSeek Harness plugin: use the OpenCode Zen free model lane with no API key — llm adapter registration, live model catalog, and streaming decode for all three wire protocols (chat / responses / messages).",
+  "main": "./lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./lib/*": "./lib/*",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "icon.svg",
+    "README.md",
+    "README.zh.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "cordis",
+    "opencode",
+    "opencode-zen",
+    "free-model",
+    "llm-provider"
+  ],
+  "license": "MIT",
+  "author": "artorias-zj",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/artorias-zj/dsh-opencode-free-model.git"
+  },
+  "homepage": "https://github.com/artorias-zj/dsh-opencode-free-model#readme",
+  "bugs": {
+    "url": "https://github.com/artorias-zj/dsh-opencode-free-model/issues"
+  },
+  "engines": {
+    "node": "^22.15.0 || >=24.0.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}
