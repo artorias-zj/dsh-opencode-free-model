@@ -102,6 +102,58 @@ Restart DSH once after installing: host plugin code is cached by URL, so togglin
 the loader entry re-runs `apply()` from the cached module rather than reloading
 modules you changed on disk.
 
+## Compatibility & permissions
+
+| | |
+|---|---|
+| **Profiles** | Any profile that mounts `@deepseek-ai/dsh-llm` — verified on `desktop` and `web`. Host half only: no `dsh.client` declaration, no browser code. |
+| **Platform** | Anywhere Node runs. Pure ESM, no native modules, no build step, no runtime dependencies. |
+| **Runtime** | Node `^22.15.0 || >=24.0.0` (the `engines.node` range). |
+| **DSH version** | Built and tested against DeepSeek Harness `0.2.0-rc.2`. `engines.dsh` is deliberately *not* declared: only that one line has actually been exercised, and a SemVer range would claim more than has been verified. |
+| **Credentials** | None. The lane is a public key-free allowance, so the plugin holds no secret and reads none — it never touches the credential service. |
+| **Registers** | Two `llm` provider routes. It adds no tools, no commands, no slash commands, no keyboard shortcuts and no client UI. |
+| **Writes** | Only under `$DSH_HOME/opencode-free-model/` — `runtime.json`, `catalog.json`, `availability.json`, each written atomically. Nothing outside that directory. |
+| **Reads** | Your own attached images, and only to inline one into a request the model is already answering (through the optional `attachments` service; if it is absent, image blocks fall back to the text projection the runtime already performs). |
+| **Outbound hosts** | `opencode.ai` — inference and model listing, the only destination your prompts reach — plus `api.ipify.org` / `ipinfo.io` / `ipapi.co`, which are read once to learn this machine's public IP and country so the plugin knows whether a re-probe is needed. Details in [Upstream](#upstream). |
+| **Telemetry** | None. Nothing is reported anywhere except the request itself. |
+| **Category** | Models & Reasoning. |
+
+## What it looks like
+
+The picker groups, exactly as the plugin advertises them (alphabetical, as
+described under [Routes](#routes)):
+
+```
+OpenCode Free                    9 models
+  Fledge Alpha Free
+  Jev 1.13
+  Ling 3.1 Flash Free
+  Longcat 2.5 Preview Free
+  MiMo V2.5
+  MiMo V2.6 Flash
+  Nemotron 3 Ultra
+  Nemotron 3.5 Lightning
+  Space Bunny
+
+OpenCode Free · region-limited   2 models
+  Muse Spark 1.2
+  Muse Spark 1.3
+```
+
+And one real streamed turn, captured against the live lane — note the disjoint
+token accounting:
+
+```
+finish {"kind":"stop"}
+usage  {"inputTokens":34,"outputTokens":11,"totalTokens":237,"cacheReadTokens":192,"reasoningTokens":8}
+tools  0
+answer "OK"
+```
+
+`inputTokens` is uncached input only — `34 = 226 prompt − 192 cached` — which is
+what the harness expects and what the provider's raw `prompt_tokens` does not
+give you.
+
 ## Layout
 
 ```

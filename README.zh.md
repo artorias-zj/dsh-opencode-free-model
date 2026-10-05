@@ -88,6 +88,55 @@ CLI 会把依赖与 `dsh.profile.bundles` 条目写进 profile 的 `package.json
 装完需要重启一次 DSH：宿主插件代码是按 URL 缓存的，切换 loader 条目只会重跑 `apply()`，
 不会重新加载改动过的模块。
 
+## 兼容性与权限
+
+| | |
+|---|---|
+| **Profile** | 任何挂了 `@deepseek-ai/dsh-llm` 的 profile —— 已在 `desktop` 与 `web` 上验证。纯 Host 半身：没有 `dsh.client` 声明，没有浏览器代码。 |
+| **平台** | 有 Node 的地方都能跑。纯 ESM，无原生模块、无构建步骤、无运行时依赖。 |
+| **运行时** | Node `^22.15.0 || >=24.0.0`（即 `engines.node` 范围）。 |
+| **DSH 版本** | 针对 DeepSeek Harness `0.2.0-rc.2` 构建与测试。**故意不声明 `engines.dsh`**：实际跑过的只有这一条版本线，写一个 SemVer 区间等于宣称超出验证范围的兼容性。 |
+| **凭证** | 无。这条车道是公共免密额度，插件不持有也不读取任何密钥 —— 它完全不碰凭证服务。 |
+| **注册了什么** | 两条 `llm` provider 路由。不加任何 tool、命令、斜杠命令、快捷键或客户端 UI。 |
+| **写盘** | 只在 `$DSH_HOME/opencode-free-model/` 下 —— `runtime.json`、`catalog.json`、`availability.json`，均为原子写。该目录之外不写任何东西。 |
+| **读取** | 你自己附加的图片，且仅用于把图片内联进一次模型本来就要回答的请求（走可选的 `attachments` 服务；该服务不存在时，图片块回落到运行时本就会做的文本投影）。 |
+| **出网目标** | `opencode.ai` —— 推理与模型清单，你的 prompt 只发往这里 —— 以及 `api.ipify.org` / `ipinfo.io` / `ipapi.co`，只读一次本机出口 IP 与国家码，用来判断是否需要重探。详见[上游](#上游)。 |
+| **遥测** | 无。除了请求本身，不向任何地方上报任何东西。 |
+| **分类** | Models & Reasoning。 |
+
+## 长什么样
+
+选择器里的分组，就是插件实际广告出来的内容（字母序，规则见[路由](#路由)）：
+
+```
+OpenCode Free                    9 个模型
+  Fledge Alpha Free
+  Jev 1.13
+  Ling 3.1 Flash Free
+  Longcat 2.5 Preview Free
+  MiMo V2.5
+  MiMo V2.6 Flash
+  Nemotron 3 Ultra
+  Nemotron 3.5 Lightning
+  Space Bunny
+
+OpenCode Free · region-limited   2 个模型
+  Muse Spark 1.2
+  Muse Spark 1.3
+```
+
+以及一轮真实流式回合（打在线上车道），注意 usage 的拆账方式：
+
+```
+finish {"kind":"stop"}
+usage  {"inputTokens":34,"outputTokens":11,"totalTokens":237,"cacheReadTokens":192,"reasoningTokens":8}
+tools  0
+answer "OK"
+```
+
+`inputTokens` 只算未命中的输入 —— `34 = 226 prompt − 192 cached` —— 这是宿主期望的口径，
+而供应商原始返回的 `prompt_tokens` 不会给你这个数。
+
 ## 结构
 
 ```
