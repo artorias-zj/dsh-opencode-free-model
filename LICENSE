@@ -1,14 +1,6 @@
 MIT License
 
 Copyright (c) 2026 dsh-opencode-free-model contributors
-
-The wire protocol implemented here (the OpenCode Zen free lane: pooled
-`Bearer public` credential, client fingerprint headers, per-model endpoint
-split, the free-tier tool-fingerprint gate, per-session quota accounting, and
-the regional gate) was derived from the MIT-licensed reference implementation
-`dsh-our-free-model`, Copyright (c) 2026 zouyuxuan122, and from the MIT-licensed
-`zen-gate` project. Their copyright notice is preserved below.
-
 Copyright (c) 2026 zouyuxuan122
 
 Permission is hereby granted, free of charge, to any person obtaining a copy

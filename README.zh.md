@@ -141,4 +141,5 @@ MIT（见 [`LICENSE`](LICENSE)）。
 
 线协议事实（免密池化凭证、客户端指纹头、按模型分端点、免费档工具指纹闸门、
 per-session 额度记账、地区闸门）来自 MIT 许可的参考实现 `dsh-our-free-model`
-(Copyright © 2026 zouyuxuan122) 与 `zen-gate` 项目，其版权声明保留在 `LICENSE` 中。
+(Copyright © 2026 zouyuxuan122) 与 `zen-gate` 项目。两份版权声明都写在 `LICENSE` 里，
+而 `LICENSE` 保持未改动的 MIT 原文，以便被工具自动识别为 MIT。

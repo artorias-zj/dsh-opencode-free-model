@@ -162,4 +162,5 @@ The wire-protocol facts (the pooled key-free credential, the client fingerprint
 headers, the per-model endpoint split, the free-tier tool-fingerprint gate, the
 per-session quota accounting, and the regional gate) come from the MIT-licensed
 reference implementation `dsh-our-free-model` (Copyright © 2026 zouyuxuan122) and
-the `zen-gate` project; their copyright notice is preserved in `LICENSE`.
+the `zen-gate` project. Both copyright notices are carried in `LICENSE`, which is
+kept as unmodified MIT text so the license is machine-detectable.
