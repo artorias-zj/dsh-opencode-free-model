@@ -2,6 +2,8 @@
 
 [English](README.md) | 中文
 
+[![Listed on dsh-plugin.org](https://dsh-plugin.org/badges/listed.svg)](https://dsh-plugin.org/plugins/artorias-zj/dsh-opencode-free-model)
+
 DeepSeek Harness 插件：**免 API Key** 接入 **OpenCode Zen 免费模型车道**（`opencode.ai/zen/v1/*`）。
 
 一个纯 Host 半身的 cordis 插件。它在 `llm` 服务上注册两条 provider 路由，

@@ -2,6 +2,8 @@
 
 English | [中文](README.zh.md)
 
+[![Listed on dsh-plugin.org](https://dsh-plugin.org/badges/listed.svg)](https://dsh-plugin.org/plugins/artorias-zj/dsh-opencode-free-model)
+
 A DeepSeek Harness plugin that puts the **OpenCode Zen free model lane**
 (`opencode.ai/zen/v1/*`) into your model picker with **no API key**.
 
