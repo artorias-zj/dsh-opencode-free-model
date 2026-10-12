@@ -1,6 +1,6 @@
 {
   "name": "dsh-opencode-free-model",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "type": "module",
   "description": "DeepSeek Harness plugin: use the OpenCode Zen free model lane with no API key — llm adapter registration, live model catalog, and streaming decode for all three wire protocols (chat / responses / messages).",
