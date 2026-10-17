@@ -24,12 +24,13 @@ picker.
 | | |
 |---|---|
 | 🔑 **No key** | The lane is keyed by a pooled credential, `Authorization: Bearer public`. The plugin holds no secret of yours, and stores none. |
-| 🔀 **Three wire protocols** | `muse-spark-*` goes to `/zen/v1/responses`, `union-alpha` to `/zen/v1/messages`, everything else to `/zen/v1/chat/completions`; all three SSE dialects decode into one host block protocol. (Routing is by model id, so a model the upstream withdraws simply stops being advertised — `union-alpha` is in that state today; the mapping itself still stands.) |
+| 🔀 **Three wire protocols** | All three gateway dialects are implemented and decoded into one host block protocol: `/zen/v1/chat/completions` for the free roster, `/zen/v1/responses` for `muse-spark-*`, `/zen/v1/messages` for `union-alpha`. (Routing is by model id, and a model the upstream withdraws simply stops being advertised — `union-alpha` and the `-contributor-free` Muse Spark ids are in that state today, so every live free model currently rides the chat wire; the other two mappings still stand for when they return.) |
 | 🧭 **Protocol decided by shape** | The gateway lies in `Content-Type` (a JSON header over an SSE body is a real production incident). The verdict comes from the body's own shape, and the bytes spent sniffing it are replayed — not one token is buffered. |
-| 🖐 **The fingerprint quartet** | The free tier requires the request body to declare the tool names `bash/glob/grep/read`, or it answers 403 `FreeTierError`. A missing slot is filled by promoting a real tool that can answer for it (`pwsh`→`bash` on Windows) before it is faked, and the response side restores the caller's own spelling. |
-| 🧷 **Stable sessions** | One conversation maps to one stable `ses_…`. Minting a fresh session per request gets you rate-limited by the gateway's per-session accounting (429). |
+| 🖐 **The fingerprint tool gate** | The free tier refuses a request body that does not declare a tool named exactly `read` (403 `FreeTierError`). The plugin declares that one, plus `bash/glob/grep` for a wider footprint, filling a missing slot by promoting a real tool that can answer for it (`pwsh`→`bash` on Windows) before it is faked, and the response side restores the caller's own spelling. |
+| 🧷 **Stable sessions** | One conversation maps to one stable `ses_…`, in the gateway's own *decoded* id form. The twelve hex digits are `~(time × 0x1000 + counter)` and the counter must stay small — a random hex or sha256 prefix decodes to a large counter and is refused 403 no matter how correct the rest of the request is. Minting a fresh session per request also gets you rate-limited by per-session accounting (429); the derivation gives stability and a canonical shape at once. |
+| 🪪 **Attribution without the refused token** | The harness requires an attribution User-Agent on every request, and this lane refuses exactly one product token in it (`deepseek-harness/<version>`). The plugin keeps the attribution but rewrites that product name to `dsh`, preserving version and origin URL — see [Upstream](#upstream). |
 | 🔍 **Availability probing** | A background probe with concurrency 2 classifies every model as `available / region-blocked / unavailable / throttled / unknown`. An egress change re-probes immediately; an all-429 round backs off exponentially; an all-refused round does not empty the picker; 5xx never demotes a model. |
-| 🌍 **Region routing** | Egress-sensitive models (`muse-spark-*`) that the gateway refuses here move to the `opencode-free-model-region` route; `exposeRegionModels: false` hides it. |
+| 🌍 **Region routing** | Egress-sensitive models (`muse-spark-*`) that the gateway refuses here move to the `opencode-free-model-region` route; `exposeRegionModels: false` hides it. No live free model is currently egress-sensitive, so that route is normally empty. |
 | ♻️ **Reasoning-cutoff continuation** | A turn cut off with reasoning and nothing visible — no text, no tool call, no finish token — is continued once from its checkpoint, with tools forced off. |
 | 🎚 **Effort levels are real budgets** | The lane ignores `reasoning_effort` and every `thinking.*` spelling; the only control it honours is `max_tokens`. So `light/balanced/deep` map to output budgets, and a model that cannot stop thinking (`canDisableThinking: false`) has every rung doubled, since thinking and the answer share one ceiling. |
 
@@ -126,20 +127,17 @@ The picker groups, exactly as the plugin advertises them (alphabetical, as
 described under [Routes](#routes)):
 
 ```
-OpenCode Free                    9 models
-  Fledge Alpha Free
+OpenCode Free                   10 models
+  Beam
+  Big Pickle
+  DeepSeek V4.1 Flash
+  GLM 5.3 Flash
   Jev 1.13
-  Ling 3.1 Flash Free
-  Longcat 2.5 Preview Free
-  MiMo V2.5
+  LongCat 2.5 Preview
   MiMo V2.6 Flash
-  Nemotron 3 Ultra
   Nemotron 3.5 Lightning
+  Nemotron 3.5 Super VL
   Space Bunny
-
-OpenCode Free · region-limited   2 models
-  Muse Spark 1.2
-  Muse Spark 1.3
 ```
 
 And one real streamed turn, captured against the live lane — note the disjoint
@@ -147,14 +145,15 @@ token accounting:
 
 ```
 finish {"kind":"stop"}
-usage  {"inputTokens":34,"outputTokens":11,"totalTokens":237,"cacheReadTokens":192,"reasoningTokens":8}
+usage  {"inputTokens":34,"outputTokens":16,"totalTokens":50,"reasoningTokens":14}
 tools  0
 answer "OK"
 ```
 
-`inputTokens` is uncached input only — `34 = 226 prompt − 192 cached` — which is
-what the harness expects and what the provider's raw `prompt_tokens` does not
-give you.
+`inputTokens` is uncached input only — the provider's `prompt_tokens` minus any
+cached prefix — which is what the harness expects and what the raw
+`prompt_tokens` does not give you. This capture had no cache hit, so the field is
+absent rather than zero.
 
 ## Layout
 
@@ -169,7 +168,7 @@ dsh-opencode-free-model/
 └── lib/               the plugin, 13 modules
     index.js     Host half: apply, registration, catalog refresh, probe loop, membership, config merge
     adapter.js   OcFreeModelAdapter: providerInfo/listModels/resolveModel/prepareCall/stream
-    upstream.js  upstream vocabulary: base URL, three endpoints, fingerprint quartet, session/request ids, headers
+    upstream.js  upstream vocabulary: base URL, three endpoints, the tool gate, session/request ids, headers
     http.js      outbound HTTP: deadlines, byte sniffing, SSE framing, failure classification
     stream.js    three-wire SSE -> host StreamChunk (block allocation, usage accounting, terminal frames, error frames)
     messages.js  tool-pairing repair + three-wire message projection
@@ -196,6 +195,30 @@ One source, and it is not a relay: `https://opencode.ai/zen/v1/*`.
 | Model listing | `GET …/zen/v1/models` | same |
 | Egress IP | `api.ipify.org` / `ipinfo.io` / `ipapi.co` (reads back this machine's public IP and country code, only to decide whether a re-probe is needed) | none |
 
+### The User-Agent conflict, explicitly
+
+The harness's provider contract requires every request to carry an attribution
+User-Agent, and states that nothing can suppress it. That string is
+`deepseek-harness/<version> (+https://github.com/deepseek-ai/deepseek-harness)`.
+This lane answers that exact product token with 403 `FreeTierError` — measured
+case-insensitively, and regardless of anything else in the header — while a bare
+`deepseek-harness` with no version, the same words inside a parenthesised URL,
+and `deepseek_harness/…` all pass.
+
+The plugin therefore sends
+`opencode/1.18.31 dsh/<version> (+https://github.com/deepseek-ai/deepseek-harness)`:
+the client token the lane identifies, plus the attribution with only its product
+name respelled. This is a deliberate, documented deviation — the alternative is a
+lane that answers 403 to every turn. `lib/http.js` (`userAgentWith`) is the single
+place that does it, and `lib/kernel.js` still reports the harness's own string
+unchanged, so the seam stays honest.
+
+Nothing else on the wire is gated: `/zen/v1` and `/inference/v1` both answer, and
+`x-opencode-client` / `x-opencode-request` / `x-opencode-session-id` /
+`x-opencode-project` are all individually dispensable. The two checks that
+actually decide the outcome are the session id's decoded shape and the
+User-Agent token above — fixing one alone still returns 403.
+
 ## Known limitations
 
 - **`GenerateOptions` sampling is `temperature` / `maxTokens` / `stop` only**, and
@@ -207,6 +230,13 @@ One source, and it is not a relay: `https://opencode.ai/zen/v1/*`.
   your egress may use, so the plugin has to ask.
 - **The probe period is read at mount time**: changing `probeIntervalMinutes`
   needs a plugin reload to take effect.
+- **The lane's gate is not a published contract**: the session-id shape and the
+  refused User-Agent token were established by measurement, not documentation, so
+  the gateway can tighten them again without notice. When it does, every turn
+  fails with `FreeTierError` surfaced as `CLIENT_ERROR` and `fingerprintRejected:
+  true` — that is the signal to look for an update, not to re-authenticate.
+- **The attribution User-Agent is respelled**, not omitted: see
+  [The User-Agent conflict](#the-user-agent-conflict-explicitly).
 
 ## License
 

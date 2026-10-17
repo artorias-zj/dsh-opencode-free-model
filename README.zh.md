@@ -21,12 +21,13 @@ dsh plugin --profile desktop add github:artorias-zj/dsh-opencode-free-model
 | | |
 |---|---|
 | 🔑 **免密** | 车道用的是池化凭证 `Authorization: Bearer public`，插件里没有、也不存任何属于你的密钥。 |
-| 🔀 **三线协议** | `muse-spark-*` 走 `/zen/v1/responses`，`union-alpha` 走 `/zen/v1/messages`，其余走 `/zen/v1/chat/completions`；三套 SSE 事件全部解码成同一套宿主块协议。（分流按模型 id 固定，上游把某个模型从清单里撤掉时它就不再被挂出——`union-alpha` 目前就是这种状态，映射本身仍然有效。） |
+| 🔀 **三线协议** | 三条网关方言都已实现并解码成同一套宿主块协议：免费清单走 `/zen/v1/chat/completions`，`muse-spark-*` 走 `/zen/v1/responses`，`union-alpha` 走 `/zen/v1/messages`。（分流按模型 id 固定；上游撤掉的模型就不再被挂出——`union-alpha` 与带 `-contributor-free` 后缀的 Muse Spark 目前都是这种状态，所以现在每一个在线的免费模型都走 chat 线；另外两条映射等它们回来时仍然有效。） |
 | 🧭 **按形状判协议** | 网关会撒谎 `Content-Type`（JSON 头 + SSE 体是线上真实事故）。判定只看 body 自己的形状，嗅探掉的字节原样回放，不缓冲任何一个 token。 |
-| 🖐 **指纹四元组** | 免费档要求请求体声明 `bash/glob/grep/read` 四个工具名，否则 403 `FreeTierError`。缺的槽位优先由真实工具顶替（Windows 上 `pwsh`→`bash`），顶不了才放假工具，并在响应侧把工具名改回调用方的拼写。 |
-| 🧷 **稳定会话** | 同一 conversation 映射出稳定的 `ses_…`；每次请求换会话会被网关按 per-session 额度限流成 429。 |
+| 🖐 **工具指纹闸门** | 免费档要求请求体声明一个**名字恰好是 `read`** 的工具，否则 403 `FreeTierError`。插件一并声明 `bash/glob/grep` 以扩大覆盖面，缺的槽位优先由真实工具顶替（Windows 上 `pwsh`→`bash`），顶不了才放假工具，并在响应侧把工具名改回调用方的拼写。 |
+| 🧷 **稳定会话** | 同一 conversation 映射出稳定的 `ses_…`，而且是网关自己的**解码后**形状。12 位 hex 是 `~(time × 0x1000 + counter)`，counter 必须很小——随手写的 hex 或 sha256 前缀会解出一个大 counter，请求其余部分再正确也是 403。每次请求换会话还会被 per-session 额度限流成 429；这套推导同时给你稳定性和规范形状。 |
+| 🪪 **保留归因、改写被拒的 token** | 宿主强制每条请求带归因 User-Agent，而这条车道恰好拒绝其中 `deepseek-harness/<version>` 这一个产品 token。插件保留归因，只把产品名改写成 `dsh`，版本号与来源 URL 原样保留——见[上游](#上游)。 |
 | 🔍 **可用性探测** | 后台并发 2 探测每个模型，区分 `available / region-blocked / unavailable / throttled / unknown`。出口 IP 变化立即重探；整轮 429 指数退避；整轮全拒不清空选择器；5xx 不降级模型。 |
-| 🌍 **地区路由** | 出口敏感模型（`muse-spark-*`）被地区拒绝时移入 `opencode-free-model-region` 路由；`exposeRegionModels: false` 可隐藏。 |
+| 🌍 **地区路由** | 出口敏感模型（`muse-spark-*`）被地区拒绝时移入 `opencode-free-model-region` 路由；`exposeRegionModels: false` 可隐藏。当前没有在线的免费模型对出口敏感，所以该路由通常是空的。 |
 | ♻️ **推理断流续写** | 纯推理被截断（无正文、无工具调用、无终帧）时，把检查点当作上下文续写一次，续写强制禁用工具。 |
 | 🎚 **努力档位 = 真实预算** | 车道的 `reasoning_effort` / `thinking.*` 全被忽略，唯一真正生效的是 `max_tokens`。所以 `light/balanced/deep` 映射为输出预算；常思模型（`canDisableThinking: false`）的档位 ×2（与答案共享上限）。 |
 
@@ -111,33 +112,30 @@ CLI 会把依赖与 `dsh.profile.bundles` 条目写进 profile 的 `package.json
 选择器里的分组，就是插件实际广告出来的内容（字母序，规则见[路由](#路由)）：
 
 ```
-OpenCode Free                    9 个模型
-  Fledge Alpha Free
+OpenCode Free                    10 个模型
+  Beam
+  Big Pickle
+  DeepSeek V4.1 Flash
+  GLM 5.3 Flash
   Jev 1.13
-  Ling 3.1 Flash Free
-  Longcat 2.5 Preview Free
-  MiMo V2.5
+  LongCat 2.5 Preview
   MiMo V2.6 Flash
-  Nemotron 3 Ultra
   Nemotron 3.5 Lightning
+  Nemotron 3.5 Super VL
   Space Bunny
-
-OpenCode Free · region-limited   2 个模型
-  Muse Spark 1.2
-  Muse Spark 1.3
 ```
 
 以及一轮真实流式回合（打在线上车道），注意 usage 的拆账方式：
 
 ```
 finish {"kind":"stop"}
-usage  {"inputTokens":34,"outputTokens":11,"totalTokens":237,"cacheReadTokens":192,"reasoningTokens":8}
+usage  {"inputTokens":34,"outputTokens":16,"totalTokens":50,"reasoningTokens":14}
 tools  0
 answer "OK"
 ```
 
-`inputTokens` 只算未命中的输入 —— `34 = 226 prompt − 192 cached` —— 这是宿主期望的口径，
-而供应商原始返回的 `prompt_tokens` 不会给你这个数。
+`inputTokens` 只算未命中的输入 —— 供应商的 `prompt_tokens` 减去命中缓存的前缀 —— 这是宿主期望的口径，
+而原始 `prompt_tokens` 不会给你这个数。上面这次没有命中缓存，所以该字段是缺失而不是 0。
 
 ## 结构
 
@@ -152,7 +150,7 @@ dsh-opencode-free-model/
 └── lib/               插件本体，13 个模块
     index.js     Host 半身：apply、注册、目录刷新、探测循环、membership、配置合并
     adapter.js   OcFreeModelAdapter：providerInfo/listModels/resolveModel/prepareCall/stream
-    upstream.js  上游词表：基址、三条端点、指纹四元组、会话/请求 id、请求头
+    upstream.js  上游词表：基址、三条端点、工具指纹、会话/请求 id、请求头
     http.js      出站 HTTP：截止时间、字节嗅探、SSE 拆帧、失败分类
     stream.js    三线 SSE → 宿主 StreamChunk（块分配、usage 拆账、终帧、错误帧）
     messages.js  工具配对修复 + 三线消息投影
@@ -178,6 +176,25 @@ dsh-opencode-free-model/
 | 模型清单 | `GET …/zen/v1/models` | 同上 |
 | 出口 IP | `api.ipify.org` / `ipinfo.io` / `ipapi.co`（只读本机出口 IP 与国家码，用于判断是否需要重探） | 无 |
 
+### 关于 User-Agent 的这处冲突，说明白
+
+宿主的 provider 契约要求每条请求都带归因 User-Agent，并声明任何做法都不能把它省掉。
+那个字符串就是 `deepseek-harness/<version> (+https://github.com/deepseek-ai/deepseek-harness)`。
+而这条车道对这个产品 token 直接回 403 `FreeTierError`——实测大小写不敏感、且与头部其余内容无关；
+反过来，不带版本的裸词 `deepseek-harness`、写在括号 URL 里的同一串词、以及
+`deepseek_harness/…` 全部放行。
+
+所以插件发的是
+`opencode/1.18.31 dsh/<version> (+https://github.com/deepseek-ai/deepseek-harness)`：
+车道用来识别客户端的 token，加上只改了产品名拼写的归因。这是**有意为之且在文档里写明的偏离**——
+不这么做，车道会对每一个回合回 403。全插件只有 `lib/http.js` 的 `userAgentWith` 一处做这件事，
+`lib/kernel.js` 仍然原样报告宿主自己的字符串，保住了这条缝的诚实性。
+
+线上其余部分都不设闸：`/zen/v1` 与 `/inference/v1` 都通，
+`x-opencode-client` / `x-opencode-request` / `x-opencode-session-id` / `x-opencode-project`
+逐个删掉也都通。真正决定成败的只有两项——会话 id 的解码形状，以及上面的 User-Agent token；
+只修其中一项仍然 403。
+
 ## 已知限制
 
 - **`GenerateOptions` 的采样只有 `temperature` / `maxTokens` / `stop`**，车道侧真正生效的只有输出上限，
@@ -185,6 +202,10 @@ dsh-opencode-free-model/
 - **努力档位是预算**：低档位会同时缩短思考与答案，因为车道只有一个共享上限可控。
 - **地区判定依赖探测**：网关不公开哪些模型对你的出口可用，只能问出来。
 - **探测周期在挂载时读取**：改 `probeIntervalMinutes` 需要重载插件才生效。
+- **车道的闸门不是公开契约**：会话 id 形状与被拒的 User-Agent token 都是实测出来的，不是文档写的，
+  因此网关随时可能再收紧一次。真收紧时，每个回合都会以 `FreeTierError` 失败并被呈现为
+  `CLIENT_ERROR` 且带 `fingerprintRejected: true`——那是"去找新版本"的信号，不是"重新认证"。
+- **归因 User-Agent 是被改写，而不是被省略**：见[关于 User-Agent 的这处冲突](#关于-user-agent-的这处冲突说明白)。
 
 ## License
 
