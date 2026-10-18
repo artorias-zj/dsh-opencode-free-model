@@ -32,7 +32,7 @@ picker.
 | 🔍 **Availability probing** | A background probe with concurrency 2 classifies every model as `available / region-blocked / unavailable / throttled / unknown`. An egress change re-probes immediately; an all-429 round backs off exponentially; an all-refused round does not empty the picker; 5xx never demotes a model. |
 | 🌍 **Region routing** | Egress-sensitive models (`muse-spark-*`) that the gateway refuses here move to the `opencode-free-model-region` route; `exposeRegionModels: false` hides it. No live free model is currently egress-sensitive, so that route is normally empty. |
 | ♻️ **Reasoning-cutoff continuation** | A turn cut off with reasoning and nothing visible — no text, no tool call, no finish token — is continued once from its checkpoint, with tools forced off. |
-| 🎚 **Effort levels are real budgets** | The lane ignores `reasoning_effort` and every `thinking.*` spelling; the only control it honours is `max_tokens`. So `light/balanced/deep` map to output budgets, and a model that cannot stop thinking (`canDisableThinking: false`) has every rung doubled, since thinking and the answer share one ceiling. |
+| 🎚 **Thinking levels are the real control** | The gateway *validates* `reasoning_effort` and the level measurably moves reasoning volume, so each model advertises the rungs it actually accepts (`none` … `max`) and the plugin sends the selected one verbatim. The menus differ per model: `big-pickle` has no `minimal`/`xhigh`, and `space-bunny-free` refuses `none`. A level a model does not declare is never forwarded — it falls back to that model's default rather than drawing a 400. |
 
 ## Routes
 
@@ -172,7 +172,7 @@ dsh-opencode-free-model/
     http.js      outbound HTTP: deadlines, byte sniffing, SSE framing, failure classification
     stream.js    three-wire SSE -> host StreamChunk (block allocation, usage accounting, terminal frames, error frames)
     messages.js  tool-pairing repair + three-wire message projection
-    effort.js    effort levels -> output budgets
+    effort.js    per-model thinking levels -> reasoning_effort
     recovery.js  checkpoint-continuation policy
     catalog.js   capability baseline + free-lane filter + listing parser + membership split
     probe.js     availability probing (concurrency 2, failure classification, egress detection)
@@ -221,11 +221,14 @@ User-Agent token above — fixing one alone still returns 403.
 
 ## Known limitations
 
-- **`GenerateOptions` sampling is `temperature` / `maxTokens` / `stop` only**, and
-  the only one the lane honours is the output ceiling — so `reasoningEffort`
-  means "budget rung" here, not "thinking intensity".
-- **An effort level is a budget**: a lower rung shortens the thinking *and* the
-  answer, because the lane gives you one shared ceiling and nothing else.
+- **`GenerateOptions` sampling is `temperature` / `maxTokens` / `stop` plus
+  `reasoningEffort`**, and the lane honours the output ceiling and the thinking
+  level. They are independent: the level controls how much the model thinks, the
+  ceiling bounds thinking *and* answer together.
+- **The thinking menu is per model**, because the gateway validates the value and
+  the accepted sets genuinely differ (`big-pickle` refuses `minimal`/`xhigh`;
+  `space-bunny-free` refuses `none`). A rung the model does not declare is
+  substituted with that model's default rather than sent.
 - **Region verdicts require probing**: the gateway does not disclose which models
   your egress may use, so the plugin has to ask.
 - **The probe period is read at mount time**: changing `probeIntervalMinutes`

@@ -29,7 +29,7 @@ dsh plugin --profile desktop add github:artorias-zj/dsh-opencode-free-model
 | 🔍 **可用性探测** | 后台并发 2 探测每个模型，区分 `available / region-blocked / unavailable / throttled / unknown`。出口 IP 变化立即重探；整轮 429 指数退避；整轮全拒不清空选择器；5xx 不降级模型。 |
 | 🌍 **地区路由** | 出口敏感模型（`muse-spark-*`）被地区拒绝时移入 `opencode-free-model-region` 路由；`exposeRegionModels: false` 可隐藏。当前没有在线的免费模型对出口敏感，所以该路由通常是空的。 |
 | ♻️ **推理断流续写** | 纯推理被截断（无正文、无工具调用、无终帧）时，把检查点当作上下文续写一次，续写强制禁用工具。 |
-| 🎚 **努力档位 = 真实预算** | 车道的 `reasoning_effort` / `thinking.*` 全被忽略，唯一真正生效的是 `max_tokens`。所以 `light/balanced/deep` 映射为输出预算；常思模型（`canDisableThinking: false`）的档位 ×2（与答案共享上限）。 |
+| 🎚 **思考档位就是真正的控制** | 网关会**校验** `reasoning_effort`，且档位确实改变推理量，所以每个模型只挂出它真正接受的档位（`none`…`max`），插件把选中的那个原样下发。各模型菜单不同：`big-pickle` 没有 `minimal`/`xhigh`，`space-bunny-free` 拒绝 `none`。模型没声明的档位绝不下发——退回该模型默认档，而不是换一个 400。 |
 
 ## 路由
 
@@ -154,7 +154,7 @@ dsh-opencode-free-model/
     http.js      出站 HTTP：截止时间、字节嗅探、SSE 拆帧、失败分类
     stream.js    三线 SSE → 宿主 StreamChunk（块分配、usage 拆账、终帧、错误帧）
     messages.js  工具配对修复 + 三线消息投影
-    effort.js    努力档位 → 输出预算
+    effort.js    逐模型思考档位 → reasoning_effort
     recovery.js  检查点续写策略
     catalog.js   能力基线表 + 免费车道过滤 + listing 解析 + membership 拆分
     probe.js     可用性探测（并发 2、失败分类、出口探测）
@@ -197,9 +197,10 @@ dsh-opencode-free-model/
 
 ## 已知限制
 
-- **`GenerateOptions` 的采样只有 `temperature` / `maxTokens` / `stop`**，车道侧真正生效的只有输出上限，
-  所以 `reasoningEffort` 在这里的含义是"预算档位"而不是"思考强度"。
-- **努力档位是预算**：低档位会同时缩短思考与答案，因为车道只有一个共享上限可控。
+- **`GenerateOptions` 的采样是 `temperature` / `maxTokens` / `stop` 加 `reasoningEffort`**，
+  车道侧真正生效的是输出上限与思考档位。两者互相独立：档位决定模型想多久，上限同时约束思考与答案。
+- **思考档位是逐模型的**：网关会校验该字段，且各模型接受的集合确实不同（`big-pickle` 拒绝
+  `minimal`/`xhigh`，`space-bunny-free` 拒绝 `none`）。模型没声明的档位不会下发，而是替换成该模型的默认档。
 - **地区判定依赖探测**：网关不公开哪些模型对你的出口可用，只能问出来。
 - **探测周期在挂载时读取**：改 `probeIntervalMinutes` 需要重载插件才生效。
 - **车道的闸门不是公开契约**：会话 id 形状与被拒的 User-Agent token 都是实测出来的，不是文档写的，
