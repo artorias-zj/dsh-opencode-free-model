@@ -29,10 +29,13 @@ picker.
 | 🖐 **The fingerprint tool gate** | The free tier refuses a request body that does not declare a tool named exactly `read` (403 `FreeTierError`). The plugin declares that one, plus `bash/glob/grep` for a wider footprint, filling a missing slot by promoting a real tool that can answer for it (`pwsh`→`bash` on Windows) before it is faked, and the response side restores the caller's own spelling. |
 | 🧷 **Stable sessions** | One conversation maps to one stable `ses_…`, in the gateway's own *decoded* id form. The twelve hex digits are `~(time × 0x1000 + counter)` and the counter must stay small — a random hex or sha256 prefix decodes to a large counter and is refused 403 no matter how correct the rest of the request is. Minting a fresh session per request also gets you rate-limited by per-session accounting (429); the derivation gives stability and a canonical shape at once. |
 | 🪪 **Attribution without the refused token** | The harness requires an attribution User-Agent on every request, and this lane refuses exactly one product token in it (`deepseek-harness/<version>`). The plugin keeps the attribution but rewrites that product name to `dsh`, preserving version and origin URL — see [Upstream](#upstream). |
-| 🔍 **Availability probing** | A background probe with concurrency 2 classifies every model as `available / region-blocked / unavailable / throttled / unknown`. An egress change re-probes immediately; an all-429 round backs off exponentially; an all-refused round does not empty the picker; 5xx never demotes a model. |
+| 🔍 **Availability probing** | A background probe with concurrency 2 classifies every model as `available / region-blocked / unavailable / throttled / unknown`. An egress change re-probes immediately; an all-429 round backs off exponentially; an all-refused round does not empty the picker; 5xx never demotes a model. Each verdict is stamped with when the probe *started*, not when it answered, so a slow reply cannot read as fresher than a newer sample. |
 | 🌍 **Region routing** | Egress-sensitive models (`muse-spark-*`) that the gateway refuses here move to the `opencode-free-model-region` route; `exposeRegionModels: false` hides it. No live free model is currently egress-sensitive, so that route is normally empty. |
+| 📏 **Windows that are measured, not published** | The listing discloses an id and nothing else, and models.dev's `200000` for these ids behaves as a *floor*: this lane accepted a 1025229-token prompt on `deepseek-v4.1-flash-free` and a 900694-token one on `glm-5.3-flash-free`, both answered with a 200. So an exact-id override table is consulted before the family patterns, because an exact id is the narrower claim: `deepseek-v4.1-flash-free` is 1048576 / 384000 with vision (its family row said 128000 / 64000, vision off), `glm-5.3-flash-free` and `nemotron-3.5-super-vl-free` are 1048576 / 131072 with vision, and `big-pickle` 262144 / 131072 with vision instead of the fallback. `beam-free` and `flint-40b-free` keep the fallback on purpose — nothing has been measured for them, and a guess would be worse than an honest floor. |
+| 🧮 **An impossible usage stamp is dropped, not metered** | Free-lane multimodal turns have reported a prompt larger than the model's own window — observed as roughly 619k total on a 256k-window model after a short vision turn — and the host soft-budgets from that sample, then fail-closes with `CONTEXT_WINDOW_EXCEEDED` while the real conversation is a few thousand tokens. So a stamp whose input side cannot fit the window the catalog claims for that id is discarded at the source: output and reasoning counts survive, the prompt side is zeroed and `totalTokens` omitted, and the turn's accumulator holds input at 0 for the rest of the turn, because once one attempt's prompt is unknown no later sum rebuilds it. It fires only where the window is a measured row — a stamp above the *fallback* proves the fallback is undersized, not that the stamp is wrong. |
+| 🧠 **A provider reason field is never silently dropped** | When an assistant message already carries a `reasoning_content` string, the Chat projection sends it upstream exactly as it arrived, an explicit empty string included — to a reasoning model "present but empty" and "absent" are different statements, and one that sees its own reasoning again on a tool follow-up turn keeps its thread where one without it restarts the problem. This is the provider *field* being preserved, not the harness's reasoning *blocks*, which are never projected onto the wire. Note that the harness transmits thinking as blocks, so in practice the field is usually absent and the guard finds nothing: it is there so that dropping it stays a decision rather than an accident. |
 | ♻️ **Reasoning-cutoff continuation** | A turn cut off with reasoning and nothing visible — no text, no tool call, no finish token — is continued once from its checkpoint, with tools forced off. |
-| 🎚 **Thinking levels are the real control** | The gateway *validates* `reasoning_effort` and the level measurably moves reasoning volume, so each model advertises the rungs it actually accepts (`none` … `max`) and the plugin sends the selected one verbatim. The menus differ per model: `big-pickle` has no `minimal`/`xhigh`, and `space-bunny-free` refuses `none`. A level a model does not declare is never forwarded — it falls back to that model's default rather than drawing a 400. |
+| 🎚 **Thinking levels are the real control** | The gateway *validates* `reasoning_effort` and the level measurably moves reasoning volume, so each model advertises the rungs it actually accepts (`none` … `max`) and the plugin sends the selected one verbatim. The menus differ per model: `big-pickle` has no `minimal`/`xhigh`, while the `-free` ids accept all seven. A level a model does not declare is never forwarded — it falls back to that model's default rather than drawing a 400. |
 
 ## Routes
 
@@ -127,18 +130,22 @@ The picker groups, exactly as the plugin advertises them (alphabetical, as
 described under [Routes](#routes)):
 
 ```
-OpenCode Free                   10 models
+OpenCode Free                   8 models
   Beam
   Big Pickle
   DeepSeek V4.1 Flash
+  Flint 40B
   GLM 5.3 Flash
-  Jev 1.13
-  LongCat 2.5 Preview
   MiMo V2.6 Flash
   Nemotron 3.5 Lightning
   Nemotron 3.5 Super VL
-  Space Bunny
 ```
+
+`Jev 1.13` is on the upstream listing but serves no wire — every protocol answers
+`400 ModelProtocolUnsupported` — so it is left out of the seed and the first
+probe round removes it. `LongCat 2.5 Preview` and `Space Bunny` are no longer on
+the listing at all, so they have left the roster too; their display names stay in
+the table, which is only ever consulted for an id the gateway actually named.
 
 And one real streamed turn, captured against the live lane — note the disjoint
 token accounting:
@@ -155,6 +162,12 @@ cached prefix — which is what the harness expects and what the raw
 `prompt_tokens` does not give you. This capture had no cache hit, so the field is
 absent rather than zero.
 
+A stamp is only metered when it can be true. The harness soft-budgets from the
+last sample it saw, so a prompt count larger than the model's own window is not
+merely wrong — it is what fail-closes a tiny conversation with
+`CONTEXT_WINDOW_EXCEEDED`: the plugin drops the input side instead of forwarding
+it, keeps the output and reasoning counts, and stops summing input for that turn.
+
 ## Layout
 
 ```
@@ -166,16 +179,16 @@ dsh-opencode-free-model/
 ├── README.md          this file
 ├── README.zh.md       Chinese
 └── lib/               the plugin, 13 modules
-    index.js     Host half: apply, registration, catalog refresh, probe loop, membership, config merge
-    adapter.js   OcFreeModelAdapter: providerInfo/listModels/resolveModel/prepareCall/stream
+    index.js     Host half: apply, registration, catalog refresh, probe loop (stamps verdict start time), membership, config merge
+    adapter.js   OcFreeModelAdapter: providerInfo/listModels/resolveModel/prepareCall/stream (clamped usage, `upstreamFinish`)
     upstream.js  upstream vocabulary: base URL, three endpoints, the tool gate, session/request ids, headers
     http.js      outbound HTTP: deadlines, byte sniffing, SSE framing, failure classification
-    stream.js    three-wire SSE -> host StreamChunk (block allocation, usage accounting, terminal frames, error frames)
-    messages.js  tool-pairing repair + three-wire message projection
+    stream.js    three-wire SSE -> host StreamChunk (block allocation, usage accounting + stamp clamp, terminal frames, error frames)
+    messages.js  tool-pairing repair + three-wire message projection (incl. a verbatim `reasoning_content` echo)
     effort.js    per-model thinking levels -> reasoning_effort
     recovery.js  checkpoint-continuation policy
-    catalog.js   capability baseline + free-lane filter + listing parser + membership split
-    probe.js     availability probing (concurrency 2, failure classification, egress detection)
+    catalog.js   capability baseline + exact-id override layer + free-lane filter + listing parser + membership split
+    probe.js     availability probing (concurrency 2, failure classification, egress detection, start time)
     store.js     JsonStore (atomic writes, coalesced writes, corrupt files preserved)
     channel.js   single-producer / single-consumer async channel
     kernel.js    the only seam allowed to import @deepseek-ai/* (attribution UA)
@@ -184,6 +197,14 @@ dsh-opencode-free-model/
 `kernel.js` is the only file that names `@deepseek-ai/*`; every other module
 depends on the structural `ctx` contract alone, so the plugin pins no kernel
 version and the rule is checkable with one grep.
+
+Two details there are easy to miss. `stream.js`'s clamp is applied by
+`adapter.js`, not by the decoder, because whether a stamp is *impossible* depends
+on the window the catalog claims for that id — an exact-id override or a family
+row, never the conservative fallback. And a finish chunk carries
+`upstreamFinish: <provider token>` only when the harness's fallback mapped an
+abnormal ending onto `stop`, so a strict consumer (a manual probe, a post-mortem)
+can decline to certify a turn that merely looks clean.
 
 ## Upstream
 
@@ -227,8 +248,9 @@ User-Agent token above — fixing one alone still returns 403.
   ceiling bounds thinking *and* answer together.
 - **The thinking menu is per model**, because the gateway validates the value and
   the accepted sets genuinely differ (`big-pickle` refuses `minimal`/`xhigh`;
-  `space-bunny-free` refuses `none`). A rung the model does not declare is
-  substituted with that model's default rather than sent.
+  `space-bunny-free`, when it returns to the roster, refuses `none`). A rung the
+  model does not declare is substituted with that model's default rather than
+  sent.
 - **Region verdicts require probing**: the gateway does not disclose which models
   your egress may use, so the plugin has to ask.
 - **The probe period is read at mount time**: changing `probeIntervalMinutes`

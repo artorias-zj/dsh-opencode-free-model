@@ -26,10 +26,13 @@ dsh plugin --profile desktop add github:artorias-zj/dsh-opencode-free-model
 | 🖐 **工具指纹闸门** | 免费档要求请求体声明一个**名字恰好是 `read`** 的工具，否则 403 `FreeTierError`。插件一并声明 `bash/glob/grep` 以扩大覆盖面，缺的槽位优先由真实工具顶替（Windows 上 `pwsh`→`bash`），顶不了才放假工具，并在响应侧把工具名改回调用方的拼写。 |
 | 🧷 **稳定会话** | 同一 conversation 映射出稳定的 `ses_…`，而且是网关自己的**解码后**形状。12 位 hex 是 `~(time × 0x1000 + counter)`，counter 必须很小——随手写的 hex 或 sha256 前缀会解出一个大 counter，请求其余部分再正确也是 403。每次请求换会话还会被 per-session 额度限流成 429；这套推导同时给你稳定性和规范形状。 |
 | 🪪 **保留归因、改写被拒的 token** | 宿主强制每条请求带归因 User-Agent，而这条车道恰好拒绝其中 `deepseek-harness/<version>` 这一个产品 token。插件保留归因，只把产品名改写成 `dsh`，版本号与来源 URL 原样保留——见[上游](#上游)。 |
-| 🔍 **可用性探测** | 后台并发 2 探测每个模型，区分 `available / region-blocked / unavailable / throttled / unknown`。出口 IP 变化立即重探；整轮 429 指数退避；整轮全拒不清空选择器；5xx 不降级模型。 |
+| 🔍 **可用性探测** | 后台并发 2 探测每个模型，区分 `available / region-blocked / unavailable / throttled / unknown`。出口 IP 变化立即重探；整轮 429 指数退避；整轮全拒不清空选择器；5xx 不降级模型。每条判定记的是探测**开始**的时刻而不是应答的时刻，所以慢回合不会被误当成更新的样本。 |
 | 🌍 **地区路由** | 出口敏感模型（`muse-spark-*`）被地区拒绝时移入 `opencode-free-model-region` 路由；`exposeRegionModels: false` 可隐藏。当前没有在线的免费模型对出口敏感，所以该路由通常是空的。 |
+| 📏 **窗口是量出来的，不是抄来的** | 清单只公开 id，别的什么都不说；而 models.dev 给这些 id 标的 `200000` 只是一个**下限**——这条车道在 `deepseek-v4.1-flash-free` 上接受过 1025229 token 的 prompt，在 `glm-5.3-flash-free` 上接受过 900694 token 的，两次都回 200。所以先查精确 id 覆盖表、再走族模式：精确 id 是更窄的主张。`deepseek-v4.1-flash-free` 为 1048576 / 384000 且支持视觉（它的族行原本写的是 128000 / 64000、不支持视觉），`glm-5.3-flash-free` 与 `nemotron-3.5-super-vl-free` 为 1048576 / 131072 且支持视觉，`big-pickle` 为 262144 / 131072 且支持视觉、不再吃保守回退值。`beam-free` 与 `flint-40b-free` **故意**保留回退值——它们没有实测数字，编一个比给出诚实下限更糟。 |
+| 🧮 **不合法的 usage 直接丢掉，而不是照抄** | 免费车道的多模态回合会报出比模型自身窗口还大的 prompt——实测在一个 256k 窗口的模型上、一轮很短的视觉对话之后报出约 619k 总量——宿主会拿这个样本做软预算，然后在真实对话只有几千 token 的情况下以 `CONTEXT_WINDOW_EXCEEDED` 硬失败。所以只要一份计数的输入侧装不进该 id 在目录里声明的窗口，它在源头就被丢弃：输出与推理计数保留，prompt 侧归零、`totalTokens` 省略，并且本轮之后一直把输入记 0——因为一旦某次尝试的 prompt 成了未知，后面任何求和都拼不回它。这条只对量出来的窗口生效：超过**回退值**的计数只能证明回退值太小，不能证明计数是错的。 |
+| 🧠 **供应商的推理字段不会被悄悄丢掉** | 只要 assistant 消息上已经带着 `reasoning_content` 字符串，Chat 投影就把它原样发往上游，显式空串也一样——对推理模型来说「有但为空」和「没有这个字段」是两句不同的话，而工具回填那一轮再看到自己的推理才接得上线索，看不到就会从头重来。这里保的是供应商的那**字段**，不是 harness 的推理**块**——后者永不投影到线上。要注意 harness 是把思考当作块来传的，所以实践中这个字段通常并不存在、这段判断多半什么也找不到：留着它是为了让「丢掉它」继续是一个决定，而不是一次意外。 |
 | ♻️ **推理断流续写** | 纯推理被截断（无正文、无工具调用、无终帧）时，把检查点当作上下文续写一次，续写强制禁用工具。 |
-| 🎚 **思考档位就是真正的控制** | 网关会**校验** `reasoning_effort`，且档位确实改变推理量，所以每个模型只挂出它真正接受的档位（`none`…`max`），插件把选中的那个原样下发。各模型菜单不同：`big-pickle` 没有 `minimal`/`xhigh`，`space-bunny-free` 拒绝 `none`。模型没声明的档位绝不下发——退回该模型默认档，而不是换一个 400。 |
+| 🎚 **思考档位就是真正的控制** | 网关会**校验** `reasoning_effort`，且档位确实改变推理量，所以每个模型只挂出它真正接受的档位（`none`…`max`），插件把选中的那个原样下发。各模型菜单不同：`big-pickle` 没有 `minimal`/`xhigh`，而 `-free` 系列七个档位全收。模型没声明的档位绝不下发——退回该模型默认档，而不是换一个 400。 |
 
 ## 路由
 
@@ -112,18 +115,21 @@ CLI 会把依赖与 `dsh.profile.bundles` 条目写进 profile 的 `package.json
 选择器里的分组，就是插件实际广告出来的内容（字母序，规则见[路由](#路由)）：
 
 ```
-OpenCode Free                    10 个模型
+OpenCode Free                   8 个模型
   Beam
   Big Pickle
   DeepSeek V4.1 Flash
+  Flint 40B
   GLM 5.3 Flash
-  Jev 1.13
-  LongCat 2.5 Preview
   MiMo V2.6 Flash
   Nemotron 3.5 Lightning
   Nemotron 3.5 Super VL
-  Space Bunny
 ```
+
+`Jev 1.13` 出现在上游清单里但没有任何一条线能服务——三套协议都回
+`400 ModelProtocolUnsupported`——所以它不进种子，第一轮探测就会把它摘掉。
+`LongCat 2.5 Preview` 与 `Space Bunny` 则已经不在清单上了，因此也离开了名册；
+它们的显示名仍留在表里，而那张表只会被一个网关确实点过名的 id 查到时才用得上。
 
 以及一轮真实流式回合（打在线上车道），注意 usage 的拆账方式：
 
@@ -137,6 +143,10 @@ answer "OK"
 `inputTokens` 只算未命中的输入 —— 供应商的 `prompt_tokens` 减去命中缓存的前缀 —— 这是宿主期望的口径，
 而原始 `prompt_tokens` 不会给你这个数。上面这次没有命中缓存，所以该字段是缺失而不是 0。
 
+只有站得住脚的计数才会被记账。宿主是拿最近一次样本做软预算的，所以一个比模型自身窗口还大的
+prompt 数不只是"不准"，它就是小对话被 `CONTEXT_WINDOW_EXCEEDED` 硬失败的原因：插件丢掉输入侧而不是
+把它转出去，保留输出与推理计数，并且本轮不再累加输入。
+
 ## 结构
 
 ```
@@ -148,16 +158,16 @@ dsh-opencode-free-model/
 ├── README.md          英文说明
 ├── README.zh.md       本文件
 └── lib/               插件本体，13 个模块
-    index.js     Host 半身：apply、注册、目录刷新、探测循环、membership、配置合并
-    adapter.js   OcFreeModelAdapter：providerInfo/listModels/resolveModel/prepareCall/stream
+    index.js     Host 半身：apply、注册、目录刷新、探测循环（记下判定开始时刻）、membership、配置合并
+    adapter.js   OcFreeModelAdapter：providerInfo/listModels/resolveModel/prepareCall/stream（usage 过滤、`upstreamFinish`）
     upstream.js  上游词表：基址、三条端点、工具指纹、会话/请求 id、请求头
     http.js      出站 HTTP：截止时间、字节嗅探、SSE 拆帧、失败分类
-    stream.js    三线 SSE → 宿主 StreamChunk（块分配、usage 拆账、终帧、错误帧）
-    messages.js  工具配对修复 + 三线消息投影
+    stream.js    三线 SSE → 宿主 StreamChunk（块分配、usage 拆账与超窗丢弃、终帧、错误帧）
+    messages.js  工具配对修复 + 三线消息投影（含 `reasoning_content` 原样回传）
     effort.js    逐模型思考档位 → reasoning_effort
     recovery.js  检查点续写策略
-    catalog.js   能力基线表 + 免费车道过滤 + listing 解析 + membership 拆分
-    probe.js     可用性探测（并发 2、失败分类、出口探测）
+    catalog.js   能力基线表 + 精确 id 覆盖层 + 免费车道过滤 + listing 解析 + membership 拆分
+    probe.js     可用性探测（并发 2、失败分类、出口探测、开始时刻）
     store.js     JsonStore（原子写、合并写、坏文件保留）
     channel.js   单生产/单消费异步通道
     kernel.js    唯一允许 import @deepseek-ai/* 的缝（归因 UA）
@@ -165,6 +175,11 @@ dsh-opencode-free-model/
 
 `kernel.js` 是唯一提到 `@deepseek-ai/*` 的文件，其余模块只依赖结构性 `ctx` 契约，
 因此不锁内核版本、可以被静态检查（一条 grep 即可验证）。
+
+这里有两处容易忽略的细节。`stream.js` 的丢弃逻辑由 `adapter.js` 施加，而不是在解码器里——
+一份计数是否**不可能**，取决于目录为这个 id 声明的窗口：精确 id 覆盖行或族模式行，绝不会是保守回退值。
+以及，只有当宿主的兜底把一个异常收尾映射成 `stop` 时，终帧才会带 `upstreamFinish: <供应商原始 token>`，
+这样严格的消费者（手动探测、事后复盘）就可以拒绝把"看着干净"的回合当成通过。
 
 ## 上游
 
@@ -200,7 +215,7 @@ dsh-opencode-free-model/
 - **`GenerateOptions` 的采样是 `temperature` / `maxTokens` / `stop` 加 `reasoningEffort`**，
   车道侧真正生效的是输出上限与思考档位。两者互相独立：档位决定模型想多久，上限同时约束思考与答案。
 - **思考档位是逐模型的**：网关会校验该字段，且各模型接受的集合确实不同（`big-pickle` 拒绝
-  `minimal`/`xhigh`，`space-bunny-free` 拒绝 `none`）。模型没声明的档位不会下发，而是替换成该模型的默认档。
+  `minimal`/`xhigh`；`space-bunny-free` 若回到名册，它拒绝 `none`）。模型没声明的档位不会下发，而是替换成该模型的默认档。
 - **地区判定依赖探测**：网关不公开哪些模型对你的出口可用，只能问出来。
 - **探测周期在挂载时读取**：改 `probeIntervalMinutes` 需要重载插件才生效。
 - **车道的闸门不是公开契约**：会话 id 形状与被拒的 User-Agent token 都是实测出来的，不是文档写的，
