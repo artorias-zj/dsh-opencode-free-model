@@ -24,7 +24,7 @@ dsh plugin --profile desktop add github:artorias-zj/dsh-opencode-free-model
 | 🔀 **三线协议** | 三条网关方言都已实现并解码成同一套宿主块协议：免费清单走 `/zen/v1/chat/completions`，`muse-spark-*` 走 `/zen/v1/responses`，`union-alpha` 走 `/zen/v1/messages`。（分流按模型 id 固定；上游撤掉的模型就不再被挂出——`union-alpha` 与带 `-contributor-free` 后缀的 Muse Spark 目前都是这种状态，所以现在每一个在线的免费模型都走 chat 线；另外两条映射等它们回来时仍然有效。） |
 | 🧭 **按形状判协议** | 网关会撒谎 `Content-Type`（JSON 头 + SSE 体是线上真实事故）。判定只看 body 自己的形状，嗅探掉的字节原样回放，不缓冲任何一个 token。 |
 | 🖐 **工具指纹闸门** | 免费档要求请求体声明一个**名字恰好是 `read`** 的工具，否则 403 `FreeTierError`。插件一并声明 `bash/glob/grep` 以扩大覆盖面，缺的槽位优先由真实工具顶替（Windows 上 `pwsh`→`bash`），顶不了才放假工具，并在响应侧把工具名改回调用方的拼写。 |
-| 🧷 **稳定会话** | 同一 conversation 映射出稳定的 `ses_…`，而且是网关自己的**解码后**形状。12 位 hex 是 `~(time × 0x1000 + counter)`，counter 必须很小——随手写的 hex 或 sha256 前缀会解出一个大 counter，请求其余部分再正确也是 403。每次请求换会话还会被 per-session 额度限流成 429；这套推导同时给你稳定性和规范形状。 |
+| 🧷 **稳定会话** | 同一 conversation 映射出稳定的 `ses_…`，而且是网关自己的**解码后**形状。12 位 hex 是 `~(time × 0x1000 + counter)`，counter 必须很小——随手写的 hex 或 sha256 前缀会解出一个大 counter，请求其余部分再正确也是 403。每次请求换会话还会被 per-session 额度限流成 429；这套推导同时给你稳定性和规范形状。没有会话 id 的回合会落到保留的 `global` 种子上，因而与本机上所有同样没有 id 的回合共享同一条上游会话——每请求新铸一枚并不是选项，因为额度按 session 计，每次换新 id 只会把配额花成 429；所以插件把这件事说一次，而不是让并发无 id 对话悄悄共享状态。 |
 | 🪪 **保留归因、改写被拒的 token** | 宿主强制每条请求带归因 User-Agent，而这条车道恰好拒绝其中 `deepseek-harness/<version>` 这一个产品 token。插件保留归因，只把产品名改写成 `dsh`，版本号与来源 URL 原样保留——见[上游](#上游)。 |
 | 🔍 **可用性探测** | 后台并发 2 探测每个模型，区分 `available / region-blocked / unavailable / throttled / unknown`。出口 IP 变化立即重探；整轮 429 指数退避；整轮全拒不清空选择器；5xx 不降级模型。每条判定记的是探测**开始**的时刻而不是应答的时刻，所以慢回合不会被误当成更新的样本。 |
 | 🎫 **每个模型一条探测 session** | 这条车道的配额按上游 session 计，不是按键、也不是按回合。整轮共用一条 session 时，第一个模型就把额度花光，后面每个模型都读回 `429 throttled` —— 本出口能服务的模型被扣掉了它们根本没碰过的配额。现在每条探测从模型 id 派生自己的 session，同一模型的探测 session 也因此在多轮之间、重启之后保持稳定，不会每次都走进一个新的配额桶。 |
@@ -36,6 +36,12 @@ dsh plugin --profile desktop add github:artorias-zj/dsh-opencode-free-model
 | 🧠 **供应商的推理字段不会被悄悄丢掉** | 只要 assistant 消息上已经带着 `reasoning_content` 字符串，Chat 投影就把它原样发往上游，显式空串也一样——对推理模型来说「有但为空」和「没有这个字段」是两句不同的话，而工具回填那一轮再看到自己的推理才接得上线索，看不到就会从头重来。这里保的是供应商的那**字段**，不是 harness 的推理**块**——后者永不投影到线上。要注意 harness 是把思考当作块来传的，所以实践中这个字段通常并不存在、这段判断多半什么也找不到：留着它是为了让「丢掉它」继续是一个决定，而不是一次意外。 |
 | ♻️ **推理断流续写** | 纯推理被截断（无正文、无工具调用、无终帧）时，把检查点当作上下文续写一次，续写强制禁用工具。 |
 | 🎚 **思考档位就是真正的控制** | 网关会**校验** `reasoning_effort`，且档位确实改变推理量，所以每个模型只挂出它真正接受的档位（`none`…`max`），插件把选中的那个原样下发。各模型菜单不同：`big-pickle` 没有 `minimal`/`xhigh`，而 `-free` 系列七个档位全收。模型没声明的档位绝不下发——退回该模型默认档，而不是换一个 400。 |
+| 🏷 **两个工具名以别名出站** | 从真实 DSH 请求隔离出来的事实：声明 `subagent_fork` 的请求体被这条车道回 `429`，`read_image` 与 `working_directory` 一起声明时同样如此。把**同一份**请求只改这两个名字，完整的 80 工具请求就通过了——所以拒绝是按**名字**判的，与工具的形状、数量无关。这两个名字改以 `conversation_delegate` / `workspace_directory` 出站，描述与 schema 全部保留；解码器吐出的每个工具调用都会把名字还原，历史调用也一并改写——因为「声明里是别名、自己的历史里却是原名」正是这个别名要消除的不一致。别名不会落到调用方真正声明过的名字上（那种情况会退让成 `…2`）。 |
+| 🫀 **keepalive 撑不住一个已经死掉的回合** | 注释帧（`: ping`）是 SSE 明说「忽略」的东西，所以它也不该给空闲时钟上弦。当定时器是每次读取都重置时，每 10–15 秒 ping 一次的网关就能把一个卡死、没有任何 token 的回合无限期吊住：请求永远不会超时，它只是占着连接，直到网关自己放弃。现在时钟是**滚动截止时间**，只有真正的内容才重新上弦——包括还在缓冲区里累积的大 body 或半条 `data:` 行，它们虽然还没派发，但确实是进展。 |
+| 🧩 **只有被截断的工具调用才算毁掉回合** | 解析不了的参数分两种，把它们混为一谈会一次切断所有恢复路径。**结构不完整**的值——未闭合的字符串、不配对的括号，也就是被上限截断或丢帧留下的形状——才是坏回合。而**完整但非法**的值（括号全闭合的裸值）是一个普通调用，它的 schema 错误应该回到模型那里成为一个可修的错误；把它标成坏回合会让本轮变成 `max-tokens`，harness 于是修剪掉这个调用而不执行它，模型永远不知道错在哪。括号不平衡的**两个方向**都算不完整，所以丢前缀的碎片（`"p.txt"}`）仍然走那条验证过的重试路径。 |
+| 🩺 **空的 5xx body 与网关打嗝被区分开** | 没有信封的 `HTTP 502`，无论网关是绊了一下还是拒绝了这**一个**请求，读起来一模一样。既然这条车道对一部分图片请求回的就是裸 5xx 加空 body，这种情况现在会点明失败在哪一跳、并说明请求带了图片——三种线上写法（`image_url`、`input_image`、`image`）都匹配——同时保留 5xx 本身隐含的可重试性。空 body 的 4xx 仍然按状态码分类。 |
+| 👁 **`-vl` 是厂商自己的视觉标记** | `nemotron-3.5-super-vl` 就是这么发布的，而在该变体出现之前写下的族行会把它描述成纯文本。一个完整的 `vl` 段——夹在分隔符之间，或在任意一端——会把「不支持视觉」的行升级，于是该变体不会被说成看不见；而只是**含有**这几个字母的模型（`avlantis`、`evil-free`）不会被误伤；带自己实测行的 id 也不受影响，因为精确 id 是更窄的主张。 |
+| 🧾 **缓存命中按命中申报，不按未命中计价** | 这条车道每种协议的 prompt 侧都是**已含命中量**的总数，所以 `inputTokens` 只计未命中的余量，命中量单独申报。把两者合并进去不是舍入误差：账本给缓存输入的定价只是未命中的零头，合并后会读成 0% 命中率，并把每一个 token 都按未命中价计费。同一个事实接受四种写法——Messages 的 `cache_read_input_tokens` / `cache_creation_input_tokens`、OpenAI 形状的 `prompt_tokens_details.cached_tokens`、Responses 形状的 `input_tokens_details.cached_tokens`，以及 `prompt_cache_hit_tokens`。Anthropic 自己的帧被单独识别为唯一一种「`input_tokens` 已经就是未命中余量」的形状，因此直接申报而不再减第二次——再减一次会把一个全命中的回合记成零输入。 |
 
 ## 路由
 
@@ -163,9 +169,9 @@ dsh-opencode-free-model/
 └── lib/               插件本体，13 个模块
     index.js     Host 半身：apply、注册、目录刷新、探测循环（记下判定开始时刻）、membership、配置合并
     adapter.js   OcFreeModelAdapter：providerInfo/listModels/resolveModel/prepareCall/stream（usage 过滤、`upstreamFinish`）
-    upstream.js  上游词表：基址、三条端点、工具指纹、会话/请求 id、请求头
-    http.js      出站 HTTP：截止时间、字节嗅探、SSE 拆帧、失败分类
-    stream.js    三线 SSE → 宿主 StreamChunk（块分配、usage 拆账与超窗丢弃、终帧、错误帧）
+    upstream.js  上游词表：基址、三条端点、工具指纹（含避让别名）、会话/请求 id、请求头
+    http.js      出站 HTTP：截止时间、只由真内容上弦的空闲时钟、字节嗅探、SSE 拆帧、失败分类
+    stream.js    三线 SSE → 宿主 StreamChunk（块分配、缓存感知的 usage 拆账与超窗丢弃、截断调用识别、终帧、错误帧）
     messages.js  工具配对修复 + 三线消息投影（含 `reasoning_content` 原样回传）
     effort.js    逐模型思考档位 → reasoning_effort
     recovery.js  检查点续写策略
