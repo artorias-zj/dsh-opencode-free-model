@@ -1,9 +1,9 @@
 {
   "name": "dsh-opencode-free-model",
-  "version": "2.4.0",
+  "version": "2.5.0",
   "private": true,
   "type": "module",
-  "description": "DeepSeek Harness plugin: use the OpenCode Zen free model lane with no API key — llm adapter registration, live model catalog with per-id measured context windows, egress-aware availability verdicts, cache-aware token accounting, and streaming decode for all three wire protocols (chat / responses / messages).",
+  "description": "DeepSeek Harness plugin: use the OpenCode Zen free model lane with no API key — llm adapter registration, live model catalog built from the listing's own metadata plus per-id measurements, egress-aware availability verdicts learned from real turns, a quota breaker for a burned egress IP, an optional lane proxy exit, cache-aware token accounting, and streaming decode for all three wire protocols (chat / responses / messages).",
   "main": "./lib/index.js",
   "exports": {
     ".": "./lib/index.js",

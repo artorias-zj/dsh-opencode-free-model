@@ -25,6 +25,20 @@
 #   streamRecovery: true|false|{...}    one reasoning-checkpoint continuation (true)
 #   wireOverrides: {<model id>: chat|responses|messages}
 #                                       pin a model to a wire if upstream moves it
+#   endpointStyle: family|flat|zen      inference path table: the official
+#                                       client's provider-family split
+#                                       (/inference/openai/v1/… ,
+#                                       /inference/anthropic/v1/…), the flat
+#                                       /inference/v1/… form, or the legacy
+#                                       /zen/v1/… paths byte-for-byte (family)
+#   laneBreaker: true|false             refuse turns locally while a real 429's
+#                                       window is open, instead of spending each
+#                                       of them against the same wall (true)
+#   freeLane.proxyUrl: <string>         the exit this lane dials through —
+#                                       http|https|socks5|socks5h, credentials
+#                                       allowed; empty means direct ('')
+#   freeLane.fromEnvironment: <bool>    follow HTTPS_PROXY/HTTP_PROXY and honour
+#                                       NO_PROXY instead of going direct (false)
 #   baseUrl: <string>                   upstream root override (default
 #                                       https://opencode.ai, or $OPENCODE_FREE_MODEL_BASE)
 - insert:

@@ -4,11 +4,12 @@
 
 [![Listed on dsh-plugin.org](https://dsh-plugin.org/badges/listed.svg)](https://dsh-plugin.org/plugins/artorias-zj/dsh-opencode-free-model)
 
-DeepSeek Harness 插件：**免 API Key** 接入 **OpenCode Zen 免费模型车道**（`opencode.ai/zen/v1/*`）。
+DeepSeek Harness 插件：**免 API Key** 接入 **OpenCode Zen 免费模型车道**（`opencode.ai/inference/*`）。
 
 一个纯 Host 半身的 cordis 插件。它在 `llm` 服务上注册两条 provider 路由，
 把车道上的三套线协议（Chat Completions / Responses / Messages）统一解码成宿主的
-`StreamChunk` 流式协议，并用后台探测决定哪些模型挂进模型选择器。
+`StreamChunk` 流式协议，并用后台探测测到的结果、加上你自己回合已经报出的事实，
+共同决定哪些模型挂进模型选择器。
 
 ```powershell
 dsh plugin --profile desktop add github:artorias-zj/dsh-opencode-free-model
@@ -21,22 +22,26 @@ dsh plugin --profile desktop add github:artorias-zj/dsh-opencode-free-model
 | | |
 |---|---|
 | 🔑 **免密** | 车道用的是池化凭证 `Authorization: Bearer public`，插件里没有、也不存任何属于你的密钥。 |
-| 🔀 **三线协议** | 三条网关方言都已实现并解码成同一套宿主块协议：免费清单走 `/zen/v1/chat/completions`，`muse-spark-*` 走 `/zen/v1/responses`，`union-alpha` 走 `/zen/v1/messages`。（分流按模型 id 固定；上游撤掉的模型就不再被挂出——`union-alpha` 与带 `-contributor-free` 后缀的 Muse Spark 目前都是这种状态，所以现在每一个在线的免费模型都走 chat 线；另外两条映射等它们回来时仍然有效。） |
+| 🔀 **三线协议** | 三条网关方言都已实现并解码成同一套宿主块协议，走官方 2.2.x 客户端的 provider 家族路径：免费清单走 `/inference/openai/v1/chat/completions`，`muse-spark-*` 走 `/inference/openai/v1/responses`，`union-alpha` 走 `/inference/anthropic/v1/messages?beta=true`。模型清单走 `/inference/v1/models`，三套风格都能应答。`endpointStyle: flat` 把推理挪到 `/inference/v1/{chat/completions,responses,messages}`，`endpointStyle: zen` 则把 2.1 之前的 `/zen/v1/…` 路径原字节还原——所以一个不认默认值的网关，离本插件此前发布过的形状只差一个配置键。（分流按模型 id 固定；上游撤掉的模型就不再被挂出——`union-alpha` 与带 `-contributor-free` 后缀的 Muse Spark 目前都是这种状态，所以现在每一个在线的免费模型都走 chat 线；另外两条映射等它们回来时仍然有效。） |
 | 🧭 **按形状判协议** | 网关会撒谎 `Content-Type`（JSON 头 + SSE 体是线上真实事故）。判定只看 body 自己的形状，嗅探掉的字节原样回放，不缓冲任何一个 token。 |
-| 🖐 **工具指纹闸门** | 免费档要求请求体声明一个**名字恰好是 `read`** 的工具，否则 403 `FreeTierError`。插件一并声明 `bash/glob/grep` 以扩大覆盖面，缺的槽位优先由真实工具顶替（Windows 上 `pwsh`→`bash`），顶不了才放假工具，并在响应侧把工具名改回调用方的拼写。 |
+| 🖐 **工具指纹闸门** | 免费档要求请求体声明一个**名字恰好是 `read`** 的工具，否则 403 `FreeTierError`。插件一并声明 `bash/glob/grep` 以扩大覆盖面，缺的槽位优先由真实工具顶替（Windows 上 `pwsh`→`bash`），顶不了才放假工具，并在响应侧把工具名改回调用方的拼写。有一种请求体豁免：会话标题请求——没声明任何工具、一到三轮、其中没有 assistant 或 tool 轮、且系统或引导文本里带标题标记——原样按调用方写的样子发出，不追加工具、不改名、不做 prompt 注入；因为免费档对一次无工具的标题调用却带着 agent 形状的工具列表，回的就是 403/429。桌面 profile 会跑一个 session-titles 扩展，所以这些是真实请求，不是假设。 |
 | 🧷 **稳定会话** | 同一 conversation 映射出稳定的 `ses_…`，而且是网关自己的**解码后**形状。12 位 hex 是 `~(time × 0x1000 + counter)`，counter 必须很小——随手写的 hex 或 sha256 前缀会解出一个大 counter，请求其余部分再正确也是 403。每次请求换会话还会被 per-session 额度限流成 429；这套推导同时给你稳定性和规范形状。没有会话 id 的回合会落到保留的 `global` 种子上，因而与本机上所有同样没有 id 的回合共享同一条上游会话——每请求新铸一枚并不是选项，因为额度按 session 计，每次换新 id 只会把配额花成 429；所以插件把这件事说一次，而不是让并发无 id 对话悄悄共享状态。 |
 | 🪪 **保留归因、改写被拒的 token** | 宿主强制每条请求带归因 User-Agent，而这条车道恰好拒绝其中 `deepseek-harness/<version>` 这一个产品 token。插件保留归因，只把产品名改写成 `dsh`，版本号与来源 URL 原样保留——见[上游](#上游)。 |
-| 🔍 **可用性探测** | 后台并发 2 探测每个模型，区分 `available / region-blocked / unavailable / throttled / unknown`。出口 IP 变化立即重探；整轮 429 指数退避；整轮全拒不清空选择器；5xx 不降级模型。每条判定记的是探测**开始**的时刻而不是应答的时刻，所以慢回合不会被误当成更新的样本。 |
-| 🎫 **每个模型一条探测 session** | 这条车道的配额按上游 session 计，不是按键、也不是按回合。整轮共用一条 session 时，第一个模型就把额度花光，后面每个模型都读回 `429 throttled` —— 本出口能服务的模型被扣掉了它们根本没碰过的配额。现在每条探测从模型 id 派生自己的 session，同一模型的探测 session 也因此在多轮之间、重启之后保持稳定，不会每次都走进一个新的配额桶。 |
+| 🔍 **不提问也能知道可用性** | 一个真实回合自己的结果，会直接为那**一个**模型记下 `available / throttled / region-blocked / unavailable`，不发额外请求，也不编造延迟——成功就是车道开着的证据，429 就是被节流的证据，`RegionError` 就是本出口被排除的证据。判定因此是用户已经付过费的工作的副产品；没有被任何回合碰过的模型，保留它上次被测量到的状态。并发 2 的后台探测仍然存在，仍然把每个模型分成 `available / region-blocked / unavailable / throttled / unknown`，但它现在只是**兜底**：去补那些还没有回合触达的模型，而不再是判定唯一的学习途径。出口 IP 变化立即重探；整轮 429 指数退避；整轮全拒不清空选择器；5xx 不降级模型。每条探测判定记的是探测**开始**的时刻而不是应答的时刻，所以慢回合不会被误当成更新的样本。 |
+| 🧯 **烧掉的出口在本地被拒，而不是再去撞墙** | 上游按出口 IP 计免费额度，所以一个烧掉的地址对**任何**请求（任何模型、任何 session）都回 `FreeUsageLimitError`，外加一个以小时计的 `Retry-After`。以前插件是靠在墙前花探测来学这件事的，还顺手让你的下一轮为它失败。现在一个真实的 `429` 就在本地开一个窗口：时长取 `Retry-After`，拿不到可用值就按六小时；此后每个回合都在构造请求体、开 socket 之前就被本地拒绝，报 `RATE_LIMIT` 并带上重试时间。客户端闸门的 `403 FreeTierError` 是另一种判定——直接把车道**锁死**、根本不开窗口，因为等待改变不了这个客户端看起来像什么。一次成功会清掉断路器，而不是让它把时钟走完；出口变化同样会清掉它，因为那个窗口描述的是旧出口的配额桶。`laneBreaker: false` 关掉本地拒绝，但仍然记录它背后的那些判定。 |
+| 🚪 **出口是配额唯一会动的那根杠杆** | 因为上限是按出口 IP 计的，车道拨号的那个地址就是唯一能改变计数器的东西。`freeLane.proxyUrl` 接受 `http`、`https`、`socks5`、`socks5h`（含凭证），`freeLane.fromEnvironment: true` 让车道跟随 `HTTPS_PROXY`/`HTTP_PROXY` 并遵守 `NO_PROXY`；留空即直连，而且不主动问就**不读**环境——为全机器公司流量导出的 `HTTPS_PROXY` 不该悄悄改掉一条按 IP 计额度的车道的走向。插件从不自动轮换、打分或切换出口：地址配一次、校验一次，之后每个请求都用它。地址写错在**配置时**就失败，当着写下它的人的面，而不是一小时后某个回合上以一个 `fetch failed` 出现。 |
+| 🎫 **每个模型一条探测 session** | 这条车道的配额按「project id × 出口」记账（更早是按上游 session 计），不是按键、也不是按回合。整轮共用一条 session 时，第一个模型就把额度花光，后面每个模型都读回 `429 throttled` —— 本出口能服务的模型被扣掉了它们根本没碰过的配额。现在每条探测从模型 id 派生自己的 session，后台用途（探测、目录刷新）也各自派生自己的 session 而不是继承某个在线回合的，于是谁也不花对方正花到一半的那个桶。同一模型的探测 session 也因此在多轮之间、重启之后保持稳定，不会每次都走进一个新的配额桶。 |
 | 🕰 **判定只对它被测量的那条路径成立** | 网关路由哪些模型取决于它看到的公网地址，所以开个 VPN 就可能换掉名单，账号却一点没变。上一出口的判定因此被标记为 `stale`，既不继续相信、也不删除：历史留着，但一条 stale 记录读作"未测量"，于是旧路径上的地区拒绝不会再继续藏住新路径能服务的模型。路径改变时仍在途的那一轮会被**取代**——结果直接丢弃而不是落盘，因为一轮里最慢的模型最后到，而那恰恰是它用过期结论覆盖新鲜判定的时刻。节流退避同时被重置，理由是同一个：它描述的是旧路径的配额，带过去就是把新路径挡在它从没撞上过的墙后面。 |
-| 🎯 **拒绝说的是一个模型，不是整份名单** | 回合中途的 `RegionError` 以前会触发一整轮探测，从和你自己回合同一个配额池里花掉每个模型一条探测，只为确认一个拒绝已经说清楚、而且只关于某一个模型的事实——还是在最糟糕的时刻。现在它直接记下那一条判定，一个探测请求都不发。该记录不带编造的 `latencyMs` 或 `startedAt`，因为根本没有计时。 |
-| 🌍 **地区路由** | 出口敏感模型（`muse-spark-*`）被地区拒绝时移入 `opencode-free-model-region` 路由；`exposeRegionModels: false` 可隐藏。当前没有在线的免费模型对出口敏感，所以该路由通常是空的。 |
-| 📏 **窗口是量出来的，不是抄来的** | 清单只公开 id，别的什么都不说；而 models.dev 给这些 id 标的 `200000` 只是一个**下限**——这条车道在 `deepseek-v4.1-flash-free` 上接受过 1025229 token 的 prompt，在 `glm-5.3-flash-free` 上接受过 900694 token 的，两次都回 200。所以先查精确 id 覆盖表、再走族模式：精确 id 是更窄的主张。`deepseek-v4.1-flash-free` 为 1048576 / 384000 且支持视觉（它的族行原本写的是 128000 / 64000、不支持视觉），`glm-5.3-flash-free` 与 `nemotron-3.5-super-vl-free` 为 1048576 / 131072 且支持视觉，`big-pickle` 为 262144 / 131072 且支持视觉、不再吃保守回退值。`beam-free` 与 `flint-40b-free` **故意**保留回退值——它们没有实测数字，编一个比给出诚实下限更糟。 |
+| 🎯 **拒绝说的是一个模型，不是整份名单** | 回合中途的 `RegionError` 以前会触发一整轮探测，从和你自己回合同一个配额池里花掉每个模型一条探测，只为确认一个拒绝已经说清楚、而且只关于某一个模型的事实——还是在最糟糕的时刻。现在它直接记下那一条判定——来自那个已经发生过的回合——一个探测请求都不发，名单上其余部分一动不动。该记录不带编造的 `latencyMs` 或 `startedAt`，因为根本没有计时。 |
+| 🌍 **地区路由** | 出口敏感模型（`muse-spark-*`，以及上游自己的 2.2 文档点名为地区受限的 `beam-free`）被地区拒绝时移入 `opencode-free-model-region` 路由；`exposeRegionModels: false` 可隐藏。其中到底哪个需要走这条路由，是关于你出口地址的一个答案，所以它既来自探测，也同样来自上面的被动判定。 |
+| 📏 **窗口是量出来的，不是抄来的** | 清单不再只是一串 id：它现在逐行公开 `limit.context`、`limit.output`、`modalities.input` 与 `capabilities.reasoning.effort`，于是目录把这些当作中间层来读，而不是整份形状都从 id 猜。优先级是**逐字段**的，越窄越优先：本插件自己实测的精确 id 行 → 清单公开的值 → 族模式 → 保守回退值。实测行仍然赢，因为 `-free` 系列公开的 `200000/32000` 只是一个**下限**：这条车道在 `deepseek-v4.1-flash-free` 上接受过 1025229 token 的 prompt，在 `glm-5.3-flash-free` 上接受过 900694 token 的，两次都回 200。所以 `deepseek-v4.1-flash-free` 为 1048576 / 384000 且支持视觉（它的族行原本写的是 128000 / 64000、不支持视觉），`glm-5.3-flash-free` 与 `nemotron-3.5-super-vl-free` 为 1048576 / 131072 且支持视觉，`big-pickle` 为 262144 / 131072 且支持视觉、不再吃保守回退值。其余 id 只要清单自己报了数就采信清单，因为没有实测数字推翻它。`beam-free` 与 `flint-40b-free` **故意**保留清单值或回退值——它们没有实测数字，编一个比给出诚实下限更糟。 |
 | 🧮 **不合法的 usage 直接丢掉，而不是照抄** | 免费车道的多模态回合会报出比模型自身窗口还大的 prompt——实测在一个 256k 窗口的模型上、一轮很短的视觉对话之后报出约 619k 总量——宿主会拿这个样本做软预算，然后在真实对话只有几千 token 的情况下以 `CONTEXT_WINDOW_EXCEEDED` 硬失败。所以只要一份计数的输入侧装不进该 id 在目录里声明的窗口，它在源头就被丢弃：输出与推理计数保留，prompt 侧归零、`totalTokens` 省略，并且本轮之后一直把输入记 0——因为一旦某次尝试的 prompt 成了未知，后面任何求和都拼不回它。这条只对量出来的窗口生效：超过**回退值**的计数只能证明回退值太小，不能证明计数是错的。 |
 | 🧠 **供应商的推理字段不会被悄悄丢掉** | 只要 assistant 消息上已经带着 `reasoning_content` 字符串，Chat 投影就把它原样发往上游，显式空串也一样——对推理模型来说「有但为空」和「没有这个字段」是两句不同的话，而工具回填那一轮再看到自己的推理才接得上线索，看不到就会从头重来。这里保的是供应商的那**字段**，不是 harness 的推理**块**——后者永不投影到线上。要注意 harness 是把思考当作块来传的，所以实践中这个字段通常并不存在、这段判断多半什么也找不到：留着它是为了让「丢掉它」继续是一个决定，而不是一次意外。 |
 | ♻️ **推理断流续写** | 纯推理被截断（无正文、无工具调用、无终帧）时，把检查点当作上下文续写一次，续写强制禁用工具。 |
 | 🎚 **思考档位就是真正的控制** | 网关会**校验** `reasoning_effort`，且档位确实改变推理量，所以每个模型只挂出它真正接受的档位（`none`…`max`），插件把选中的那个原样下发。各模型菜单不同：`big-pickle` 没有 `minimal`/`xhigh`，而 `-free` 系列七个档位全收。模型没声明的档位绝不下发——退回该模型默认档，而不是换一个 400。 |
 | 🏷 **两个工具名以别名出站** | 从真实 DSH 请求隔离出来的事实：声明 `subagent_fork` 的请求体被这条车道回 `429`，`read_image` 与 `working_directory` 一起声明时同样如此。把**同一份**请求只改这两个名字，完整的 80 工具请求就通过了——所以拒绝是按**名字**判的，与工具的形状、数量无关。这两个名字改以 `conversation_delegate` / `workspace_directory` 出站，描述与 schema 全部保留；解码器吐出的每个工具调用都会把名字还原，历史调用也一并改写——因为「声明里是别名、自己的历史里却是原名」正是这个别名要消除的不一致。别名不会落到调用方真正声明过的名字上（那种情况会退让成 `…2`）。 |
+| 🧹 **工具历史是被修好的，不只是改了名** | 免费档会拒绝那些仍然带着「本请求没有声明过的工具词汇」的请求体，而一份在塑形之前写下的历史里全是这种东西。所以这一遍是**修复**：被清空的 `tool_calls: []` 字段整个删掉（上游对恰好这个空数组实测回过 400）；调用了一个本请求从未声明的工具，该调用**连同与它配对的结果**一起丢掉，不留一条悬空的 `role: 'tool'` 孤儿；一个被拿掉调用后什么都不剩的 assistant 行，跟着它丢掉的调用一起消失；`tool_choice` 如果点名了一个塑形后不再服务的工具，就删掉这个字段，而不是让模型去调一个它从未拿到过的工具。三种线形状都覆盖——`tool_calls` / `function_call`、`function_call` / `function_call_output`，以及 `tool_use` / `tool_result`。无工具的回放不动：一个自己没声明任何工具的请求体没有闸门要满足，而转发客户端的上下文不归这条车道删。 |
+| ✂️ **被切碎的工具名不会变成幽灵工具** | 有些网关把 `tool_calls[].function.name` 拆散在多个 delta 帧里，而每来一片就解析一次，会把半个名字折成一个错的或未知的工具——harness 于是执行一次幽灵调用，或者报出一个叫 `deep`、没有任何工具应答的调用。现在名字先缓冲，等它的第一个消费者真正需要时（第一个参数 delta，或块关闭时）才解析一次；在那之前的 delta 干脆不带名字，而下游消费者本来就容忍这一点。两种真实形状都照顾到了：每个 delta 都**重复完整名字**的服务端做的是「延续」而不是重复拼接，真正**拆开**名字的服务端才做拼接——天真地拼会把三次重复的 `read` 变成 `readreadread`，天真地替换则只留下一个被拆名字的最后一段。 |
 | 🫀 **keepalive 撑不住一个已经死掉的回合** | 注释帧（`: ping`）是 SSE 明说「忽略」的东西，所以它也不该给空闲时钟上弦。当定时器是每次读取都重置时，每 10–15 秒 ping 一次的网关就能把一个卡死、没有任何 token 的回合无限期吊住：请求永远不会超时，它只是占着连接，直到网关自己放弃。现在时钟是**滚动截止时间**，只有真正的内容才重新上弦——包括还在缓冲区里累积的大 body 或半条 `data:` 行，它们虽然还没派发，但确实是进展。 |
 | 🧩 **只有被截断的工具调用才算毁掉回合** | 解析不了的参数分两种，把它们混为一谈会一次切断所有恢复路径。**结构不完整**的值——未闭合的字符串、不配对的括号，也就是被上限截断或丢帧留下的形状——才是坏回合。而**完整但非法**的值（括号全闭合的裸值）是一个普通调用，它的 schema 错误应该回到模型那里成为一个可修的错误；把它标成坏回合会让本轮变成 `max-tokens`，harness 于是修剪掉这个调用而不执行它，模型永远不知道错在哪。括号不平衡的**两个方向**都算不完整，所以丢前缀的碎片（`"p.txt"}`）仍然走那条验证过的重试路径。 |
 | 🩺 **空的 5xx body 与网关打嗝被区分开** | 没有信封的 `HTTP 502`，无论网关是绊了一下还是拒绝了这**一个**请求，读起来一模一样。既然这条车道对一部分图片请求回的就是裸 5xx 加空 body，这种情况现在会点明失败在哪一跳、并说明请求带了图片——三种线上写法（`image_url`、`input_image`、`image`）都匹配——同时保留 5xx 本身隐含的可重试性。空 body 的 4xx 仍然按状态码分类。 |
@@ -73,6 +78,11 @@ dsh plugin --profile desktop add github:artorias-zj/dsh-opencode-free-model
         probeIntervalMinutes: 15   # 后台重探周期（分钟，≥1）
         defaultMaxTokens: 32768    # 单轮输出上限（还会被模型自身容量压低）
         streamRecovery: true       # 是否允许一次纯推理检查点续写
+        endpointStyle: family      # family | flat | zen —— 推理路径表（见下）
+        laneBreaker: true          # 真实 429 的窗口还在时，是否在本地拒绝回合
+        freeLane:                  # 车道拨号的出口；留空即直连
+          proxyUrl: ''             # http | https | socks5 | socks5h，可含凭证
+          fromEnvironment: false   # 是否跟随 HTTPS_PROXY/HTTP_PROXY 并遵守 NO_PROXY
         # wireOverrides:           # 上游改线时把某个模型钉死在某条协议上
         #   some-model-free: chat
         # baseUrl: https://opencode.ai
@@ -80,6 +90,19 @@ dsh plugin --profile desktop add github:artorias-zj/dsh-opencode-free-model
 
 形状不对的键会被忽略并记一条 warning，而不是让插件加载失败——一个拒绝加载的插件
 比一个带着默认值跑起来的插件糟得多。
+
+这四个较新的键，各自回答的是车道自身行为提出的一个问题：
+
+| 键 | 默认值 | 为什么存在 |
+|---|---|---|
+| `endpointStyle` | `family` | 推理路径走哪个前缀。`family` 是官方 2.2.x 客户端的 provider 家族切分（`/inference/openai/v1/*`、`/inference/anthropic/v1/messages?beta=true`），`flat` 是协议路径形式（`/inference/v1/*`），`zen` 则把 2.1 之前的 `/zen/v1/*` 路径原字节还原。两套回退的意义在于：一个不认默认值的网关只该花掉一个配置键，而不是等一次发版。 |
+| `laneBreaker` | `true` | 是否把一个真实 `429` 变成「窗口结束前每个请求都在本地被拒」。这个拒绝是**本地**的——上游从没要求过——所以一个在排查「某个模型为什么突然不答了」的运维必须能把它关掉。关掉之后，它背后的那些被动判定照样记录。 |
+| `freeLane.proxyUrl` | `''` | 出口地址，因为额度是按出口 IP 计的。接受 `http`、`https`、`socks5`、`socks5h`（含凭证）；留空即直连。插件不会自动轮换它。 |
+| `freeLane.fromEnvironment` | `false` | 车道是否可以跟随 `HTTPS_PROXY`/`HTTP_PROXY` 并遵守 `NO_PROXY`。默认关掉是有意的：一台为全公司流量导出代理的机器，不该悄悄改掉一条按 IP 计额度的车道的走向。 |
+
+环境变量 `HTTPS_PROXY` 只有在 `fromEnvironment` 为 `true` 时才会被读取，而显式写下的
+`proxyUrl` 永远优先于它。配错的地址只报一次 warning，然后车道走直连——也就是这些字段
+出现之前它所在的位置；一个拼写错误只该花掉一条 warning，不该花掉这次挂载。
 
 环境变量 `OPENCODE_FREE_MODEL_BASE` 可覆盖上游基址（`config.baseUrl` 优先）。
 
@@ -115,7 +138,7 @@ CLI 会把依赖与 `dsh.profile.bundles` 条目写进 profile 的 `package.json
 | **注册了什么** | 两条 `llm` provider 路由。不加任何 tool、命令、斜杠命令、快捷键或客户端 UI。 |
 | **写盘** | 只在 `$DSH_HOME/opencode-free-model/` 下 —— `runtime.json`、`catalog.json`、`availability.json`，均为原子写。该目录之外不写任何东西。 |
 | **读取** | 你自己附加的图片，且仅用于把图片内联进一次模型本来就要回答的请求（走可选的 `attachments` 服务；该服务不存在时，图片块回落到运行时本就会做的文本投影）。 |
-| **出网目标** | `opencode.ai` —— 推理与模型清单，你的 prompt 只发往这里 —— 以及 `api.ipify.org` / `ipinfo.io` / `ipapi.co`，只读一次本机出口 IP 与国家码，用来判断是否需要重探。详见[上游](#上游)。 |
+| **出网目标** | `opencode.ai` —— 推理与模型清单，你的 prompt 只发往这里 —— 以及 `api.ipify.org` / `ipinfo.io` / `ipapi.co`，只读一次本机出口 IP 与国家码，用来判断是否需要重探。当 `freeLane.proxyUrl` 设了值（或 `freeLane.fromEnvironment` 打开）时，这些推理与清单请求改为走你配置的那个地址。详见[上游](#上游)。 |
 | **遥测** | 无。除了请求本身，不向任何地方上报任何东西。 |
 | **分类** | Models & Reasoning。 |
 
@@ -124,19 +147,25 @@ CLI 会把依赖与 `dsh.profile.bundles` 条目写进 profile 的 `package.json
 选择器里的分组，就是插件实际广告出来的内容（字母序，规则见[路由](#路由)）：
 
 ```
-OpenCode Free                   8 个模型
+OpenCode Free                   12 个模型
   Beam
   Big Pickle
   DeepSeek V4.1 Flash
   Flint 40B
   GLM 5.3 Flash
+  Iceman
+  Inkling 2 Small
+  LongCat 2.5
   MiMo V2.6 Flash
+  MiniMax M3.1 Flash
   Nemotron 3.5 Lightning
   Nemotron 3.5 Super VL
 ```
 
-`Jev 1.13` 出现在上游清单里但没有任何一条线能服务——三套协议都回
-`400 ModelProtocolUnsupported`——所以它不进种子，第一轮探测就会把它摘掉。
+这是 2026-11-16 的名册：清单上的十二个免费 id。`union-alpha` 与带 `-contributor-free`
+后缀的 Muse Spark id 已经从中撤出——它们的三线映射仍然有效，等它们回来时照用，
+这也是为什么上面的协议那一行还点着它们的名字。`Jev 1.13` 出现在上游清单里但没有任何一条线能服务——
+三套协议都回 `400 ModelProtocolUnsupported`——所以它不进种子，第一轮探测就会把它摘掉。
 `LongCat 2.5 Preview` 与 `Space Bunny` 则已经不在清单上了，因此也离开了名册；
 它们的显示名仍留在表里，而那张表只会被一个网关确实点过名的 id 查到时才用得上。
 
@@ -166,12 +195,13 @@ dsh-opencode-free-model/
 ├── LICENSE
 ├── README.md          英文说明
 ├── README.zh.md       本文件
-└── lib/               插件本体，13 个模块
-    index.js     Host 半身：apply、注册、目录刷新、探测循环（记下判定开始时刻）、membership、配置合并
-    adapter.js   OcFreeModelAdapter：providerInfo/listModels/resolveModel/prepareCall/stream（usage 过滤、`upstreamFinish`）
-    upstream.js  上游词表：基址、三条端点、工具指纹（含避让别名）、会话/请求 id、请求头
+└── lib/               插件本体，14 个模块
+    index.js     Host 半身：apply、注册、目录刷新、探测循环（记下判定开始时刻）、membership、配置合并、配额断路器、被动判定
+    adapter.js   OcFreeModelAdapter：providerInfo/listModels/resolveModel/prepareCall/stream（usage 过滤、`upstreamFinish`、车道闸门）
+    upstream.js  上游词表：基址、端点风格表、工具指纹（含避让别名、标题豁免、历史修复）、会话/请求 id、请求头（trace 对、稳定 project id）
+    proxy.js     车道出口：代理解析与校验、CONNECT 与 SOCKS5 拨号、`NO_PROXY` 处理
     http.js      出站 HTTP：截止时间、只由真内容上弦的空闲时钟、字节嗅探、SSE 拆帧、失败分类
-    stream.js    三线 SSE → 宿主 StreamChunk（块分配、缓存感知的 usage 拆账与超窗丢弃、截断调用识别、终帧、错误帧）
+    stream.js    三线 SSE → 宿主 StreamChunk（块分配、缓存感知的 usage 拆账与超窗丢弃、缓冲的工具名、截断调用识别、终帧、错误帧）
     messages.js  工具配对修复 + 三线消息投影（含 `reasoning_content` 原样回传）
     effort.js    逐模型思考档位 → reasoning_effort
     recovery.js  检查点续写策略
@@ -192,13 +222,24 @@ dsh-opencode-free-model/
 
 ## 上游
 
-只有一个来源，不是中转站：`https://opencode.ai/zen/v1/*`。
+只有一个来源，不是中转站：`https://opencode.ai/inference/*`。
 
 | 用途 | 目标 | 凭证 |
 |---|---|---|
-| 推理 | `POST …/zen/v1/chat/completions`、`…/responses`、`…/messages`（按模型分流） | `Authorization: Bearer public` —— 公共免密额度，插件不含任何用户密钥 |
-| 模型清单 | `GET …/zen/v1/models` | 同上 |
+| 推理 | `POST …/inference/openai/v1/chat/completions`、`…/inference/openai/v1/responses`、`…/inference/anthropic/v1/messages?beta=true`（按模型分流） | `Authorization: Bearer public` —— 公共免密额度，插件不含任何用户密钥 |
+| 模型清单 | `GET …/inference/v1/models` | 同上 |
 | 出口 IP | `api.ipify.org` / `ipinfo.io` / `ipapi.co`（只读本机出口 IP 与国家码，用于判断是否需要重探） | 无 |
+
+推理路径就是官方 2.2.x 客户端的 provider 家族切分，而清单路径与风格无关：
+三套风格都能应答 `/inference/v1/models`，所以**清单永远不可能是那个告诉你某个网关
+服务哪条推理路径的东西**。两套回退分别是 `endpointStyle: flat`（把三套协议放回
+同一个前缀：`/inference/v1/{chat/completions,responses,messages}`）与
+`endpointStyle: zen`（把 2.1 之前的 `/zen/v1/…` 路径原字节还原）。
+今天（2026-11-16）实测：三个家族的 `/models` 都回 `200`，文档同为
+104821 字节，所以光看清单分不出它们；而推理路径本身无法对比，因为这个出口的
+免费额度已经用尽，每一个 `POST` 都回 `429 FreeUsageLimitError`。
+所以新默认值的依据是「与官方客户端一致」，不是某个被量出来的优势——
+而它离回退只差一个配置键。
 
 ### 关于 User-Agent 的这处冲突，说明白
 
@@ -214,10 +255,30 @@ dsh-opencode-free-model/
 不这么做，车道会对每一个回合回 403。全插件只有 `lib/http.js` 的 `userAgentWith` 一处做这件事，
 `lib/kernel.js` 仍然原样报告宿主自己的字符串，保住了这条缝的诚实性。
 
-线上其余部分都不设闸：`/zen/v1` 与 `/inference/v1` 都通，
+线上其余部分都不设闸：每一套路径风格都应答（`/inference/v1`、`/inference/openai/v1`、
+`/inference/anthropic/v1` 与 `/zen/v1`），
 `x-opencode-client` / `x-opencode-request` / `x-opencode-session-id` / `x-opencode-project`
 逐个删掉也都通。真正决定成败的只有两项——会话 id 的解码形状，以及上面的 User-Agent token；
 只修其中一项仍然 403。
+
+### 那条 trace 对，以及为什么一段对话想要一个桶
+
+还有两个请求头事实，来自同一条「要像官方客户端」的规则。
+
+每条请求都带一对 W3C trace：`traceparent` 与 Zipkin 单头形式的 `b3`，两者都格式正确
+（W3C 版本 `00`、采样位 `01`），id 每个请求新铸一次。一个 span 就是一个请求的工作，
+跨请求复用同一条 trace 是**坏掉的埋点客户端**的指纹，而不是真实客户端的。
+默认 `accept` 也跟着改成官方客户端 fetch 栈吐出的 `*/*` 通配符，而不再随协议变。
+
+project 头才是有意思的那个。免费额度按「project id × 出口」记账，所以
+`x-opencode-project` 里的那个身份决定了请求从哪个桶里取额度。每请求一个新 id
+（某个参考网关的做法）会把一段对话的用量撒到上游无法互相关联的身份上；而一个共享的
+字面量（本插件以前发的是 `global`）则是**一到手就已经烧掉**的：所有装在它后面的实例
+抢同一个桶。所以现在这个值是一个从该对话自己的 session 派生出来的稳定 40 位 hex。
+一段对话的重试、续写与刷新，在它整个生命周期里共用同一个配额桶——这正是按 project
+记账的用意；而一段真正不同的对话自然落在不同的桶里，因为它是另一段对话。
+闸门校验的是这个值的**形状**（40 位小写 hex），不是值本身，所以派生出来的 id
+和一个新铸的 id 一样被接受。
 
 ## 已知限制
 
@@ -225,7 +286,16 @@ dsh-opencode-free-model/
   车道侧真正生效的是输出上限与思考档位。两者互相独立：档位决定模型想多久，上限同时约束思考与答案。
 - **思考档位是逐模型的**：网关会校验该字段，且各模型接受的集合确实不同（`big-pickle` 拒绝
   `minimal`/`xhigh`；`space-bunny-free` 若回到名册，它拒绝 `none`）。模型没声明的档位不会下发，而是替换成该模型的默认档。
-- **地区判定依赖探测**：网关不公开哪些模型对你的出口可用，只能问出来。
+- **地区判定依赖探测**：网关不公开哪些模型对你的出口可用，只能问出来——要么发一次探测，
+  要么从一个已经跑过的回合上把答案读下来。
+- **新的推理路径还没有被真实回合验证过**：2026-11-16 实测三个家族的 `/models` 都回 `200`、
+  文档同为 104821 字节，这什么也区分不出来；而本出口的每个推理 `POST` 都回
+  `429 FreeUsageLimitError`，所以这些路径无法对比。`family` 默认值的依据是
+  「与官方 2.2.x 客户端一致」，不是「量出来它服务得更好」；万一判断错了，
+  `endpointStyle: zen` 会把此前那套 `/zen/v1/…` 形状原字节还原。
+- **断路器是一次本地拒绝**：`laneBreaker` 开着时，一个真实 `429` 会让插件凭自己的记账
+  拒绝这条车道，所以你看到的失败是带重试时间的 `RATE_LIMIT`，而不是上游的回答。
+  想照发不误，设 `laneBreaker: false`。
 - **探测周期在挂载时读取**：改 `probeIntervalMinutes` 需要重载插件才生效。
 - **车道的闸门不是公开契约**：会话 id 形状与被拒的 User-Agent token 都是实测出来的，不是文档写的，
   因此网关随时可能再收紧一次。真收紧时，每个回合都会以 `FreeTierError` 失败并被呈现为
